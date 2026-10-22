@@ -39,8 +39,10 @@ beforeEach(() => {
 describe("TopNavBar", () => {
   it("renders every top-level menu button", () => {
     render(<TopNavBar />);
-    for (const name of ["File", "View", "Edit", "Diagram", "Settings", "Algorithms", "Simulation"]) {
-      expect(screen.getByRole("button", { name: new RegExp(name) })).toBeTruthy();
+    // Exact names, not patterns: /Simulation/ would also match "Process Simulation". The
+    // menu icons are aria-hidden, so a button's accessible name is its label alone.
+    for (const name of ["File", "View", "Edit", "Diagram", "Settings", "Algorithms", "Simulation", "Process Simulation"]) {
+      expect(screen.getByRole("button", { name })).toBeTruthy();
     }
   });
 
@@ -103,9 +105,17 @@ describe("TopNavBar", () => {
 
   it("guards Simulation entries behind engine init (no crash before mount)", () => {
     render(<TopNavBar />);
-    fireEvent.click(screen.getByRole("button", { name: /Simulation/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Simulation" })); // exact, so "Process Simulation" does not match
     fireEvent.click(screen.getByText("Enter Simulation Mode"));
     // engine.isInitialized is false -> setState is NOT called (guard held).
     expect(mocks.globalStateObject.setState).not.toHaveBeenCalled();
+  });
+
+  it("opens the concept-mapping popup from the Process Simulation menu", () => {
+    render(<TopNavBar />); // the menu bar as the user sees it
+    fireEvent.click(screen.getByRole("button", { name: "Process Simulation" })); // open the new menu
+    fireEvent.click(screen.getByText("Concept Mapping…")); // its only entry so far
+    expect(useUiStore.getState().dialogs.processSimulationMapping).toBe(true); // the popup opens through uiStore
+    expect(mocks.globalStateObject.setState).not.toHaveBeenCalled(); // and the interaction mode is left alone
   });
 });

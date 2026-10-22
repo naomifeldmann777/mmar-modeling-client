@@ -24,7 +24,8 @@ export type DialogName =
   | "tableAttribute"
   | "uploadFile"
   | "uploadGltf"
-  | "uploadImage";
+  | "uploadImage"
+  | "processSimulationMapping"; // the concept-mapping popup of the process simulation (plan 5.2)
 
 const DIALOG_NAMES: DialogName[] = [
   "saveAs",
@@ -42,6 +43,7 @@ const DIALOG_NAMES: DialogName[] = [
   "uploadFile",
   "uploadGltf",
   "uploadImage",
+  "processSimulationMapping", // listed here too, so it starts closed and sign-out closes it like every other dialog
 ];
 
 function allClosed(): Record<DialogName, boolean> {

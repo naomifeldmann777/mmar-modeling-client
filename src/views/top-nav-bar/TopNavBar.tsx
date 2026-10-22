@@ -121,6 +121,14 @@ function buildMenus(openDialog: (name: DialogName) => void): MenuDef[] {
         { label: "Exit Simulation Mode", icon: "stop", onSelect: exitSimulation },
       ],
     },
+    // The generic process simulation, kept apart from the Simulation menu above: that one
+    // runs simulation code stored in a metamodel (Petri net, robot), this one works on any
+    // model through the concept mapping. Stepper and path analysis are added here later.
+    {
+      name: "Process Simulation",
+      icon: "account_tree", // a process shape, distinct from the Simulation menu's play icon
+      items: [{ label: "Concept Mapping…", icon: "schema", dialog: "processSimulationMapping" }], // the mapping comes first: nothing runs without it
+    },
   ];
 }
 
@@ -165,7 +173,7 @@ function MenuEntry({
 }
 
 // The menu bar itself. The title, the
-// five menus, the Algorithms button and the Simulation menu. Ctrl+S -> Save dialog
+// five menus, the Algorithms button, the Simulation menu and the Process Simulation menu. Ctrl+S -> Save dialog
 // is wired in AppLayout (it owns the keyboard hook + the ctrlPlusSPressed bus).
 export default function TopNavBar() {
   const openDialog = useUiStore((s) => s.openDialog);
@@ -191,8 +199,11 @@ export default function TopNavBar() {
             Algorithms
           </Button>
 
-          {/* Simulation menu (last entry) */}
+          {/* Simulation menu */}
           <MenuEntry menu={menus[5]} openDialog={openDialog} />
+
+          {/* Process Simulation menu (last entry) */}
+          <MenuEntry menu={menus[6]} openDialog={openDialog} />
         </Box>
       </Toolbar>
     </AppBar>
