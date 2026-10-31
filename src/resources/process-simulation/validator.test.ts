@@ -538,3 +538,139 @@ describe("validateGraph: check 24 messages use the right article", () => {
     expect(validateGraph(g)[0].message).toContain("is not the end of a branch of an AND-Split or ForkActivity");
   });
 });
+
+describe("validateGraph: check 16 behind an AND-Join", () => {
+  it("counts a value drawn in one parallel branch as drawn behind the AND-Join", () => {
+    // start → split → check (draws lager) | invoice → join → dec → endja | endnein
+    const g = graph({
+      nodes: [node("start", "Start"), node("split", "AND-Split"), node("check", "Activity"), node("invoice", "Activity"), node("join", "AND-Join"), node("dec", "Decision"), node("endja", "End"), node("endnein", "End")],
+      flows: [
+        flow("f1", "start", "split"), flow("fa", "split", "check"), flow("fb", "split", "invoice"), flow("fa2", "check", "join"), flow("fb2", "invoice", "join"), flow("f2", "join", "dec"),
+        flow("fja", "dec", "endja", row("lager", "==", "ja")), flow("fnein", "dec", "endnein", row("lager", "==", "nein")),
+      ],
+      generators: [draw("g", "check", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+    expect(validateGraph(g)).toEqual([]); // the AND-Join runs only after both branches, so lager is surely drawn at dec
+  });
+});
+
+describe("validateGraph: check 24, no flow leads into a branch from outside the pair", () => {
+  /** start → pre → split → a (draws lager) | b → join → dec → end, and dec → back → `loopTarget` when lager is "nein". */
+  function loopModel(loopTarget: string) {
+    return graph({
+      nodes: [node("start", "Start"), node("pre", "Activity"), node("split", "AND-Split"), node("a", "Activity"), node("b", "Activity"), node("join", "AND-Join"), node("dec", "Decision"), node("end", "End")],
+      flows: [
+        flow("f1", "start", "pre"), flow("f2", "pre", "split"), flow("fa", "split", "a"), flow("fb", "split", "b"), flow("fa2", "a", "join"), flow("fb2", "b", "join"), flow("f3", "join", "dec"),
+        flow("fend", "dec", "end", row("lager", "==", "ja")), flow("back", "dec", loopTarget, row("lager", "==", "nein")),
+      ],
+      generators: [draw("g", "a", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+  }
+
+  it("refuses a loop from behind the AND-Join back into a branch: the join would wait for b forever", () => {
+    const problems = validateGraph(loopModel("a"));
+    expect(problems.map((p) => [p.check, p.elementId])).toEqual([[24, "back"]]); // reported once, on the flow that enters from outside
+    expect(problems[0].message).toContain("leads into a branch of AND-Split \"split\" from outside the pair");
+  });
+
+  it("accepts a loop back to a point before the AND-Split (control)", () => {
+    expect(validateGraph(loopModel("pre"))).toEqual([]); // both branches run again in every round
+  });
+});
+
+describe("validateGraph: check 23 at one node", () => {
+  it("refuses two random generators at the same node that draw the same variable", () => {
+    const g = modelA(); // check draws lager once already
+    g.generators.g2 = draw("g2", "check", "lager", LAGER); // a second generator at check, also drawing lager
+    const problems = validateGraph(g);
+    expect(problems.map((p) => [p.check, p.elementId])).toEqual([[23, "check"]]);
+    expect(problems[0].message).toContain("draws the variable \"lager\" with 2 random generators");
+  });
+
+  it("accepts two generators at the same node that draw different variables (control)", () => {
+    const g = modelA();
+    g.generators.g2 = draw("g2", "check", "kunde", [["premium", 0.5], ["normal", 0.5]]); // a second variable, not used in any condition
+    g.variables.kunde = variable("kunde");
+    expect(validateGraph(g)).toEqual([]);
+  });
+});
+
+describe("validateGraph: check 26 (every loop can be left)", () => {
+  /** start → check (draws lager) → dec → endja when lager is "ja"; dec → order when "nein", and order → `loopTarget`. */
+  function stockLoop(loopTarget: string) {
+    return graph({
+      nodes: [node("start", "Start"), node("check", "Activity"), node("dec", "Decision"), node("order", "Activity"), node("endja", "End")],
+      flows: [
+        flow("f1", "start", "check"), flow("f2", "check", "dec"),
+        flow("fja", "dec", "endja", row("lager", "==", "ja")), flow("fnein", "dec", "order", row("lager", "==", "nein")),
+        flow("back", "order", loopTarget),
+      ],
+      generators: [draw("g", "check", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+  }
+
+  it("refuses a loop whose condition reads a variable that is not drawn again inside it", () => {
+    const problems = validateGraph(stockLoop("dec")); // order leads back to dec: lager stays "nein" forever
+    expect(problems.map((p) => [p.check, p.elementId])).toEqual([[26, "dec"]]); // reported once, on the Decision
+    expect(problems[0].message).toContain("its conditions only read \"lager\", which is not drawn again inside the loop");
+  });
+
+  it("accepts the loop when it leads back to the element that draws (control)", () => {
+    expect(validateGraph(stockLoop("check"))).toEqual([]); // check is now inside the loop: lager is drawn again in every round
+  });
+
+  it("checks a small loop inside a bigger one on its own", () => {
+    // start → check (draws lager) → dec → end | wait; wait → dec2; dec2 → wait (small loop) | check (big loop)
+    const g = graph({
+      nodes: [node("start", "Start"), node("check", "Activity"), node("dec", "Decision"), node("wait", "Activity"), node("dec2", "Decision"), node("end", "End")],
+      flows: [
+        flow("f1", "start", "check"), flow("f2", "check", "dec"),
+        flow("fja", "dec", "end", row("lager", "==", "ja")), flow("fnein", "dec", "wait", row("lager", "==", "nein")),
+        flow("f3", "wait", "dec2"),
+        flow("again", "dec2", "wait", row("lager", "==", "nein")), flow("recheck", "dec2", "check", row("lager", "==", "ja")),
+      ],
+      generators: [draw("g", "check", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+    const problems = validateGraph(g);
+    expect(problems.map((p) => [p.check, p.elementId])).toEqual([[26, "dec2"]]); // only the small loop wait → dec2 → wait: the big one passes check, which draws lager
+  });
+
+  it("counts the draws of every branch when a loop passes a parallel pair (control)", () => {
+    // start → pre → split → a (draws lager) | b → join → dec → end | pre: the loop through b passes the join, so a's draw counts too
+    const g = graph({
+      nodes: [node("start", "Start"), node("pre", "Activity"), node("split", "AND-Split"), node("a", "Activity"), node("b", "Activity"), node("join", "AND-Join"), node("dec", "Decision"), node("end", "End")],
+      flows: [
+        flow("f1", "start", "pre"), flow("f2", "pre", "split"), flow("fa", "split", "a"), flow("fb", "split", "b"), flow("fa2", "a", "join"), flow("fb2", "b", "join"), flow("f3", "join", "dec"),
+        flow("fend", "dec", "end", row("lager", "==", "ja")), flow("back", "dec", "pre", row("lager", "==", "nein")),
+      ],
+      generators: [draw("g", "a", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+    expect(validateGraph(g)).toEqual([]);
+  });
+});
+
+describe("validateGraph: check 24, a join closes exactly one split", () => {
+  it("refuses two AND-Splits on the two sides of a Decision that share one AND-Join", () => {
+    const g = graph({
+      nodes: [
+        node("start", "Start"), node("check", "Activity"), node("dec", "Decision"), node("p1", "AND-Split"), node("p2", "AND-Split"),
+        node("a", "Activity"), node("b", "Activity"), node("c", "Activity"), node("e", "Activity"), node("join", "AND-Join"), node("end", "End"),
+      ],
+      flows: [
+        flow("f1", "start", "check"), flow("f2", "check", "dec"), flow("fja", "dec", "p1", row("lager", "==", "ja")), flow("fnein", "dec", "p2", row("lager", "==", "nein")),
+        flow("a1", "p1", "a"), flow("b1", "p1", "b"), flow("c1", "p2", "c"), flow("e1", "p2", "e"),
+        flow("a2", "a", "join"), flow("b2", "b", "join"), flow("c2", "c", "join"), flow("e2", "e", "join"), flow("f3", "join", "end"),
+      ],
+      generators: [draw("g", "check", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+    const problems = validateGraph(g);
+    expect(problems.map((p) => [p.check, p.elementId])).toEqual([[24, "join"]]); // one message, on the shared join
+    expect(problems[0].message).toContain("closes the branches of 2 splits, AND-Split \"p1\" and AND-Split \"p2\"");
+  });
+});

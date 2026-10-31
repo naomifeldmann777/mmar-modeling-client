@@ -81,7 +81,6 @@ export function initialState(): RunState {
  * values it draws, and on which flows it puts tokens. Several nodes can have steps at the
  * same time, e.g. after an AND-Split one per branch; the user picks which one runs next.
  * A node can also offer several steps itself:
- * - it does not wait and has tokens on two incoming flows: one step per token;
  * - it draws a value: one step per value of the distribution;
  * - it is a Decision or OR-Split that draws: the steps also differ in where the token goes,
  *   because the drawn value decides which conditions hold.
@@ -92,14 +91,14 @@ export function possibleSteps(graph: SimulationGraph, state: RunState): Step[] {
   const hasToken = (flowId: string) => (state.tokens[flowId] ?? 0) > 0; // is there a token on this flow?
   const steps: Step[] = []; // collected over all nodes
 
-  // Four questions, one loop each; every combination of the answers is one step.
+  // Four questions, one after the other; every combination of the answers is one step.
   for (const node of Object.values(graph.nodes)) { // 1. every node of the model
-    for (const consumes of tokensToConsume(node, state, hasToken)) { // 2. which tokens can it take? None: it cannot run, and this loop does nothing
-      for (const draws of drawOptions(graph, node.id)) { // 3. which values can it draw? No generator: exactly one way, drawing nothing
-        const values = { ...state.values, ...Object.fromEntries(draws.map((draw) => [draw.variableName, draw.value])) }; // the values after this draw; a draw replaces the old value (spec 6.2)
-        for (const { produces, skips } of outgoingOptions(graph, node, values, branchEnds)) { // 4. where do its tokens go with these values? One way, except at a Decision or OR-Split
-          steps.push({ node: node.id, fromSource: node.concept === "Start", consumes, draws, produces, skips }); // one step for this combination
-        }
+    const consumes = tokensToConsume(node, state, hasToken); // 2. can it run, and which tokens does it take?
+    if (!consumes) continue; // it cannot run now: no step for this node
+    for (const draws of drawOptions(graph, node.id)) { // 3. which values can it draw? No generator: exactly one way, drawing nothing
+      const values = { ...state.values, ...Object.fromEntries(draws.map((draw) => [draw.variableName, draw.value])) }; // the values after this draw; a draw replaces the old value (spec 6.2)
+      for (const { produces, skips } of outgoingOptions(graph, node, values, branchEnds)) { // 4. where do its tokens go with these values? One way, except at a Decision or OR-Split
+        steps.push({ node: node.id, fromSource: node.concept === "Start", consumes, draws, produces, skips }); // one step for this combination
       }
     }
   }
@@ -107,42 +106,32 @@ export function possibleSteps(graph: SimulationGraph, state: RunState): Step[] {
 }
 
 /**
- * Can `node` run in `state`, and if so, which tokens does it take? The answer is a list of
- * ways; each way is the list of flows that lose a token when the node runs that way. It
- * becomes `Step.consumes`, so `executeStep` knows which tokens to remove.
+ * Can `node` run in `state`, and if so, which tokens does it take? The answer is the list of
+ * flows that lose a token when the node runs, or null when it cannot run. It becomes
+ * `Step.consumes`, so `executeStep` knows which tokens to remove.
  *
  * The rule depends on the kind of node (spec 5.2, 5.3):
- * - A node that does not wait (Activity, Decision, AND-Split, ...) needs a token on any one of
- *   its inputs and takes only that one. Each input with a token is a way of its own.
+ * - A node that does not wait (Activity, Decision, AND-Split, ...) runs as soon as one of its
+ *   inputs carries a token, and takes that token.
  * - A waiting node (AND-Join, OR-Join, SynchronizedActivity) needs a token on every input and
- *   takes them all at once: one way, or none while it is still waiting.
+ *   takes them all at once.
  * - The Start takes the token on the source place in front of it, which lies on no flow.
  *
  * Examples:
- *   Pack, inputs f1 and f2, a token on f2            -> [[f2]]       one way: take the token from f2
- *   Pack, no token on any input                      -> []           cannot run: no step
- *   Pack, tokens on f1 and f2 at the same time       -> [[f1], [f2]] two ways: two steps, each taking one token
- *   AND-Join, inputs d1 and d2, a token only on d1   -> []           still waiting
- *   AND-Join, tokens on d1 and d2                    -> [[d1, d2]]   one way: take both
- *   Start, the run has just begun                    -> [[]]         one way, taking from no flow
- *   Start, after it has run                          -> []           cannot run again
- *
- * Several ways, as in the third example, are rare: they need two tokens in front of a node
- * that does not wait. In a model that passes the validator this should not happen, since a
- * run has one token per branch and parallel branches only meet at their join (check 24); a
- * node like Pack behind the two sides of a Decision only ever gets a token on one input. The
- * function allows it anyway, because the spec's rule is that each arriving token passes on
- * its own (spec 5.3), and the firing rule follows the spec rather than relying on the validator.
- *
- * Careful: [] and [[]] look alike but mean opposite things. [] is no way at all, so the node
- * offers no step; [[]] is exactly one way that empties no flow, so the node offers one step.
+ *   Activity A, inputs f1 and f2, a token on f2      -> [f2]       take the token from f2
+ *   Activity A, no token on any input                -> null       cannot run: no step
+ *   AND-Join, inputs d1 and d2, a token only on d1   -> null       still waiting
+ *   AND-Join, tokens on d1 and d2                    -> [d1, d2]   take both
+ *   Start, the run has just begun                    -> []         runs, but takes from no flow
+ *   Start, after it has run                          -> null       cannot run again
  */
-function tokensToConsume(node: GraphNode, state: RunState, hasToken: (flowId: string) => boolean): string[][] {
-  if (node.concept === "Start") return state.sourceToken ? [[]] : []; // its token lies on no flow: one way that empties no flow ([[]]) while the token is there; once the Start has run, no way ([])
+function tokensToConsume(node: GraphNode, state: RunState, hasToken: (flowId: string) => boolean): string[] | null {
+  if (node.concept === "Start") return state.sourceToken ? [] : null; // its token lies on no flow, so it empties no flow; once the Start has run, it cannot run again
   if (WAITING_CONCEPTS.some((concept) => concept === node.concept)) { // an AND-Join, OR-Join or SynchronizedActivity
-    return node.incoming.length > 0 && node.incoming.every(hasToken) ? [node.incoming] : []; // a token on EVERY incoming flow: it waits (spec 5.3); without the length test, a node with no incoming flow would count as complete
+    return node.incoming.length > 0 && node.incoming.every(hasToken) ? node.incoming : null; // a token on EVERY incoming flow: it waits (spec 5.3); without the length test, a node with no incoming flow would count as complete
   }
-  return node.incoming.filter(hasToken).map((flowId) => [flowId]); // one way per input that carries a token, each taking only that token: [[f2]], or [[f1], [f2]] if both carry one (spec 5.3)
+  const input = node.incoming.find(hasToken); // the input the token arrived on
+  return input === undefined ? null : [input]; // takes only that token (spec 5.3)
 }
 
 /**
