@@ -55,6 +55,7 @@ import {
   type MappableModel,
   type ProcessSimulationMapping,
 } from "@/resources/process-simulation/mapping";
+import { readMappableModel } from "@/resources/process-simulation/transformer"; // the list a stored or imported mapping is checked against, shared with the stepper panel
 import {
   DATA_CONCEPT_MEANINGS,
   DATA_CONCEPT_OWNERS,
@@ -99,9 +100,9 @@ const DIALOG = "processSimulationMapping"; // the uiStore name, written once so 
  *   "Check stock"                      "Task 2.0"           Name
  *   "Ship"                             "Task 2.0"           Name
  *
- * It also returns the same elements as a `MappableModel`: the plain list
- * "element uuid -> uuids of its attribute instances" that mapping.ts checks a mapping
- * against.
+ * It also returns the model's `MappableModel`: the plain list "element uuid -> uuids of
+ * its attribute instances" that mapping.ts checks a mapping against. That list is built by
+ * readMappableModel in transformer.ts, which the stepper panel uses as well.
  *
  * Bendpoints are left out. When a line is drawn with kinks, MMAR stores every kink as a
  * class instance of its own. Such a kink is not a model element anyone would map, and
@@ -178,12 +179,7 @@ function describeModel(sceneType: SceneType, sceneInstance: SceneInstance): Mode
   return {
     sceneName: sceneInstance.name ?? "", // shown in the title and used in the export file name; a new scene may have none
     rows, // the content of the table
-    // The same elements as the plain list mapping.ts checks against. Only elements with a
-    // row are in it, so a bendpoint can never end up in a mapping.
-    model: {
-      sceneInstanceId: sceneInstance.uuid, // an imported mapping file of another model is refused against this
-      elementAttributes: Object.fromEntries(rows.map((r) => [r.id, r.attributes.map((attribute) => attribute.id)])), // element uuid -> its attribute instance uuids
-    },
+    model: readMappableModel(sceneType, sceneInstance), // the same elements as the rows (bendpoints left out there too), as the plain list mapping.ts checks against
   };
 }
 

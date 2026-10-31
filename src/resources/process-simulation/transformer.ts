@@ -6,6 +6,13 @@
  * validator. It is the MMAR adapter of the simulation: the one place that knows how MMAR
  * stores a model (instances, attribute instances, table cells, relations with roles).
  *
+ * It offers two functions, both reading the MMAR model:
+ * - readMappableModel: the list of the model's elements and their attributes, which
+ *   loadMapping (mapping.ts) needs to check a stored mapping. Used by the mapping popup and
+ *   the stepper panel, each before loading the mapping.
+ * - transformModel: the simulation graph, built from the model and the checked mapping.
+ * So when a run starts: readMappableModel → loadMapping → transformModel → startRun.
+ *
  * Deliberately NOT here:
  * - Nothing of a modelling language. No metaclass name, no attribute name and no uuid of a
  *   metamodel appears in this file: what an element is comes from the mapping, never from
@@ -32,12 +39,47 @@
 import { table_rows, type Attribute, type ClassInstance, type SceneInstance, type SceneType } from "@gds";
 import { NAME_ATTRIBUTE_UUID } from "@/constants";
 import type { ConditionRow, DistributionEntry, SimulationGraph } from "./graph";
-import type { ProcessSimulationMapping } from "./mapping";
+import type { MappableModel, ProcessSimulationMapping } from "./mapping"; // the list readMappableModel fills in, and the mapping transformModel reads
 import { parseDecimal } from "./numbers"; // probabilities may be written with a comma or a dot
 import { NODE_CONCEPTS, type DataConcept, type ElementConcept, type NodeConcept } from "./vocabulary";
 
 const CONDITION_COLUMNS = ["variable", "operator", "value", "logical operator"]; // the format rule for a TransitionCondition table
 const DISTRIBUTION_COLUMNS = ["value", "probability"]; // the format rule for a Distribution table
+
+/**
+ * The model's elements, each with the uuids of its own attribute instances: the list that
+ * loadMapping and readMapping (mapping.ts) check a mapping against.
+ *
+ * Why it is needed: the mapping is stored in the browser and may be older than the model.
+ * Since it was saved, an element may have been deleted, or the attribute chosen as its data
+ * (e.g. its condition table) may be gone. So before a stored mapping is used, loadMapping
+ * compares it with this list and drops what no longer fits. mapping.ts belongs to the
+ * library and must not read the MMAR model itself; this function hands it what it needs as
+ * a plain list.
+ *
+ * Why it is here: to fill the list, the MMAR model has to be read (class instances, relation
+ * instances, bendpoints, attribute instances), and this file is the one place that reads it.
+ * It used to be part of the mapping popup; it moved here when the stepper panel needed the
+ * same list, so both call this one function instead of keeping two copies.
+ *
+ * Example: a model with the task "Check stock" (attribute: Name) and a sequence flow (Name,
+ * condition table) gives
+ *   { sceneInstanceId: "scene-1", elementAttributes: { "check-stock": ["a1"], "flow-1": ["a2", "a3"] } }
+ *
+ * Bendpoints are left out: MMAR stores every kink of a line as a class instance of its own,
+ * which is not a model element anyone would map (the model tree hides them too).
+ */
+export function readMappableModel(sceneType: SceneType, sceneInstance: SceneInstance): MappableModel {
+  const bendpointClasses = new Set(sceneType.relationclasses.map((relationclass) => relationclass.bendpoint)); // each relation class names the class of its kinks; undefined when its lines have none
+  const elements: ClassInstance[] = [
+    ...sceneInstance.class_instances.filter((instance) => !bendpointClasses.has(instance.uuid_class)), // the boxes, without the kinks
+    ...sceneInstance.relationclasses_instances, // the lines: a relation instance is a class instance too
+  ];
+  return {
+    sceneInstanceId: sceneInstance.uuid, // a mapping of another model is refused against this
+    elementAttributes: Object.fromEntries(elements.map((element) => [element.uuid, (element.attribute_instance ?? []).map((attribute) => attribute.uuid)])), // element uuid -> its attribute instance uuids
+  };
+}
 
 /**
  * Builds the simulation graph of a model.

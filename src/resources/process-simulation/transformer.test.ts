@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 import type { SceneInstance, SceneType } from "@gds";
 import { NAME_ATTRIBUTE_UUID } from "@/constants";
-import { transformModel } from "./transformer";
+import { readMappableModel, transformModel } from "./transformer";
 import type { ProcessSimulationMapping } from "./mapping";
 
 // ---------------------------------------------------------------------------------
@@ -202,5 +202,20 @@ describe("transformModel: rules", () => {
     const graph = transformModel(sceneType, model, mapped({ v: { concept: "Variable", data: { VariableName: "v-name" } }, w: { concept: "Variable" } }));
     expect(graph.variables.v.name).toBe("lager"); // trimmed, so " lager" in a condition is not a different variable
     expect(graph.variables.w.name).toBeNull(); // spec 10, check 3 reports it
+  });
+});
+
+describe("readMappableModel", () => {
+  it("lists every element and line with its attribute instances, and leaves bendpoints out", () => {
+    const withBendpoint = { ...sceneType, relationclasses: sceneType.relationclasses.map((relationclass) => ({ ...relationclass, bendpoint: "m-kink" })) } as unknown as SceneType; // the lines of this metamodel may have kinks
+    const kink = { uuid: "kink-1", uuid_class: "m-kink", attribute_instance: [] }; // a kink of a line: stored as a class instance of its own
+    const model = scene([box("check", "Check stock"), kink], [flow("f1", "check", "check", ["lager", "==", "ja", "-"])]);
+    expect(readMappableModel(withBendpoint, model)).toEqual({
+      sceneInstanceId: "scene-1",
+      elementAttributes: {
+        check: ["check-name"], // the box with its Name attribute
+        f1: ["f1-name", "f1-cond"], // the line with its Name and condition table
+      }, // no entry for kink-1
+    });
   });
 });
