@@ -29,12 +29,31 @@
  * - A check that depends on another is skipped for an element on which that other check
  *   already failed, so one mistake gives one message, not three.
  *
+ * Three checks beyond spec 10, added in Phase 6 because of decisions on the firing rule:
+ * - Check 23: no variable is drawn in two parallel branches. The values are kept once per
+ *   run, so the value would otherwise depend on the order in which the branches are advanced,
+ *   which spec 7 rules out.
+ * - Check 24: splits and joins form matching pairs (OR-Split with OR-Join; AND-Split or
+ *   ForkActivity with AND-Join or SynchronizedActivity). Every path of every branch leads to
+ *   exactly one input of the pair's join, and every input of a join is the end of a branch.
+ *   This gives the skip tokens of spec 5.2 their place, and makes sure every join receives
+ *   exactly one token per input: no join waits forever, no node runs once per parallel
+ *   branch, and no branch ends the run while another one is still under way.
+ *
+ * - Check 25: only an outgoing flow of a Decision or an OR-Split carries a transition
+ *   condition; anywhere else it would be ignored by the firing rule.
+ *
+ * Added to check 9 in Phase 6 (and to the specification text): Start, Activity, AND-Join,
+ * OR-Join and SynchronizedActivity have exactly one outgoing flow, so that only the split
+ * concepts split the flow.
+ *
  * Source: spec 10 (the checks), spec 8 (a failed check stops the run), spec 6.1 (a
  * condition on a variable that has not been drawn is false).
  */
 import { COMPARISON_OPERATORS, evaluateCondition, LOGICAL_OPERATORS, type VariableValues } from "./condition";
 import type { GraphFlow, GraphGenerator, GraphNode, GraphVariable, SimulationGraph } from "./graph";
-import { parseDecimal } from "./transformer";
+import { parseDecimal } from "./numbers"; // checks 12 and 19 read numbers the same way as the run
+import { branchEnds, OR_PAIR, PARALLEL_PAIR } from "./pairs"; // check 24 uses the same branch ends as the firing rule
 import { WAITING_CONCEPTS, type NodeConcept } from "./vocabulary";
 
 /** One problem found by the validator. */
@@ -47,6 +66,7 @@ export interface ValidationProblem {
 
 const DECIDING: readonly NodeConcept[] = ["Decision", "OR-Split"]; // the nodes whose outgoing flows follow from conditions (spec 7)
 const SPLITTING: readonly NodeConcept[] = ["AND-Split", "OR-Split", "ForkActivity"]; // need at least two outgoing flows (spec 10, check 9)
+const SINGLE_OUTGOING: readonly NodeConcept[] = ["Start", "Activity", "AND-Join", "OR-Join", "SynchronizedActivity"]; // exactly one outgoing flow (check 9, part 2)
 const NUMERIC_OPERATORS: readonly string[] = ["<", "<=", ">", ">="]; // only for numbers (spec 10, check 19)
 const TOLERANCE = 1e-6; // "within a small tolerance" (spec 10, check 12): 0.1 + 0.2 is not exactly 0.3 in a computer
 
@@ -82,7 +102,9 @@ export function validateGraph(graph: SimulationGraph): ValidationProblem[] {
   checkMapping(context); // checks 1 to 3
   const reachable = checkStructure(context); // checks 4 to 9; returns the nodes reachable from the Start, which check 16 needs
   checkVariables(context); // checks 10 to 14
-  checkConditions(context, reachable); // checks 15 to 22
+  checkConditions(context, reachable); // checks 15 to 22, and check 25 (beyond spec)
+  checkParallelDraws(context); // check 23, beyond spec 10
+  checkPairs(context); // check 24, beyond spec 10
 
   return problems.sort((a, b) => a.check - b.check); // in the order of spec 10; sort keeps the order within a check
 }
@@ -149,14 +171,27 @@ function checkStructure({ graph, nodes, report }: Context): Set<string> {
     if (node.outgoing.length === 0) report(6, node.id, `${node.concept} "${node.label}" has no outgoing flow.`);
   }
 
-  // Check 9: joins have at least two incoming flows, splits at least two outgoing flows.
-  // Zero flows were already reported by check 6, so only a single flow is reported here.
+  // Check 9, part 1 (spec 10): joins have at least two incoming flows, splits at least two
+  // outgoing flows. Zero flows were already reported by check 6, so only a single flow is
+  // reported here: one mistake, one message.
+  //
+  // Check 9, part 2 (added to the specification in Phase 6): Start, Activity, AND-Join,
+  // OR-Join and SynchronizedActivity have exactly ONE outgoing flow. Why: the specification
+  // describes each of them as continuing on "the" outgoing flow (spec 2.1, 5.2), and the
+  // firing rule puts a token on every outgoing flow of a node that is not a Decision or an
+  // OR-Split. An Activity with two outgoing flows would therefore secretly behave like an
+  // AND-Split, without being visible as one in the model. Splitting is said explicitly, with
+  // an AND-Split, ForkActivity, Decision or OR-Split. Thanks to this rule, the only parallel
+  // splits are AND-Split and ForkActivity, which check 24 relies on.
   for (const node of nodes) {
     if (WAITING_CONCEPTS.some((concept) => concept === node.concept) && node.incoming.length === 1) {
       report(9, node.id, `${node.concept} "${node.label}" has only one incoming flow; it needs at least two.`);
     }
     if (SPLITTING.includes(node.concept) && node.outgoing.length === 1) {
       report(9, node.id, `${node.concept} "${node.label}" has only one outgoing flow; it needs at least two.`);
+    }
+    if (SINGLE_OUTGOING.includes(node.concept) && node.outgoing.length > 1) {
+      report(9, node.id, `${node.concept} "${node.label}" has ${node.outgoing.length} outgoing flows; it may have only one. Use an AND-Split, ForkActivity, Decision or OR-Split to split the flow.`);
     }
   }
 
@@ -268,7 +303,24 @@ function checkConditions({ graph, nodes, flows, generators, variables, report, d
 
   const broken = new Set<string>(); // flows whose condition cannot be evaluated; checks 20 to 22 skip their node
 
+  // Check 25 (added in Phase 6): only an outgoing flow of a Decision or an OR-Split carries a
+  // condition. Only there does a condition decide where the flow continues (spec 7); the firing
+  // rule does not evaluate it anywhere else, although in the coloured Petri net it would become
+  // a guard that could block the transition. Rather than ignoring such a condition silently,
+  // it is reported. An empty condition table (no filled row) is no condition: the transformer
+  // has already turned it into [], so the default row of every new flow is never reported.
+  // A misplaced condition is not checked any further (checks 15 to 19 and 16 skip it): one
+  // mistake, one message.
+  const misplaced = new Set<string>(); // flows with a condition that is not evaluated
   for (const flow of flows) {
+    const source = flow.source ? graph.nodes[flow.source] : undefined; // the node the flow leaves
+    if (!source || !flow.condition || flow.condition.length === 0 || DECIDING.includes(source.concept)) continue; // no condition, a source that is no node (check 1), or a place where conditions belong
+    misplaced.add(flow.id);
+    report(25, flow.id, `The ${describeFlow(flow)} has a transition condition, but it leaves ${source.concept} "${source.label}", where conditions are not evaluated, so it would be ignored. Remove the condition, or decide with a Decision or an OR-Split.`);
+  }
+
+  for (const flow of flows) {
+    if (misplaced.has(flow.id)) continue; // already reported by check 25
     for (const [index, row] of (flow.condition ?? []).entries()) {
       const where = `Row ${index + 1} of the condition of the ${describeFlow(flow)}`; // every message names the row and the flow
 
@@ -323,7 +375,7 @@ function checkConditions({ graph, nodes, flows, generators, variables, report, d
   // Check 16: on every path from the Start to a condition, its variable has been drawn before.
   const drawn = drawnOnEveryPath(graph, generators, reachable, nameOf); // node uuid -> names surely drawn once the node has run
   for (const flow of flows) {
-    if (!flow.condition || !flow.source || !reachable.has(flow.source) || broken.has(flow.id)) continue; // unreachable or already reported
+    if (!flow.condition || !flow.source || !reachable.has(flow.source) || broken.has(flow.id) || misplaced.has(flow.id)) continue; // unreachable or already reported
     const available = drawn.get(flow.source)!; // the condition is evaluated when its source node runs, after the node's own draw
     for (const name of new Set(flow.condition.map((row) => row.variableName))) {
       if (!available.has(name)) {
@@ -356,6 +408,274 @@ function checkConditions({ graph, nodes, flows, generators, variables, report, d
       if (node.concept === "OR-Split" && holding.length === 0 && !reportedChecks.has(22)) {
         report(22, node.id, `At OR-Split "${node.label}", none of the outgoing conditions holds ${when}.`);
         reportedChecks.add(22);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------
+// Beyond spec 10 (checks 23 and 24, added in Phase 6)
+// ---------------------------------------------------------------------------------
+
+/**
+ * Check 23: no variable is drawn in two branches that can run at the same time.
+ *
+ * Why: the values are kept once per run (Phase 6). If two parallel branches both draw
+ * "lager", the value that remains is the one drawn last, and which branch the user advances
+ * last is up to them. Spec 7 says that this order must not change the result.
+ *
+ * How, step by step:
+ * 1. Make a table "which variables are drawn at which node" (drawsAt), e.g.
+ *    Check stock -> [lager].
+ * 2. Look at every node after which several branches can run at the same time: an AND-Split
+ *    and a ForkActivity always put a token on every outgoing flow, an OR-Split may put tokens
+ *    on several. A Decision is not looked at: only one of its branches ever runs.
+ * 3. For every outgoing flow of such a node, collect the variables drawn in that branch
+ *    (drawnInBranch, below, explains how a branch is delimited).
+ * 4. Count in how many branches each variable is drawn. More than one: report it.
+ *
+ * Example:
+ *              ┌─▶ Check stock (draws lager) ─┐
+ *    AND-Split ┤                               ├─▶ AND-Join
+ *              └─▶ Recheck (draws lager) ──────┘
+ *    branch 1 draws {lager}, branch 2 draws {lager}: lager counted twice, so check 23 fails.
+ */
+function checkParallelDraws({ graph, nodes, generators, report }: Context) {
+  const drawsAt = new Map<string, string[]>(); // node uuid -> names of the variables drawn there
+  for (const generator of generators) {
+    const name = generator.variable ? graph.variables[generator.variable]?.name : null; // the variable written to
+    if (generator.node && name) drawsAt.set(generator.node, [...(drawsAt.get(generator.node) ?? []), name]);
+  }
+
+  // The branches of an AND-Split or ForkActivity always run in parallel, those of an OR-Split may.
+  for (const split of nodes.filter((node) => node.concept === "AND-Split" || node.concept === "ForkActivity" || node.concept === "OR-Split")) {
+    const counts = new Map<string, number>(); // variable name -> in how many branches it is drawn
+    for (const branch of split.outgoing) {
+      for (const name of drawnInBranch(graph, branch, drawsAt)) counts.set(name, (counts.get(name) ?? 0) + 1); // once per branch
+    }
+    for (const [name, count] of counts) {
+      if (count > 1) report(23, split.id, `At ${split.concept} "${split.label}", the variable "${name}" is drawn in more than one parallel branch, so its value would depend on the order of the steps.`);
+    }
+  }
+}
+
+/**
+ * The variables drawn in one branch: in every node from the branch's first node up to the
+ * point where the parallel branches meet again.
+ *
+ * Where does a branch end? Parallel branches meet again at a node that WAITS for all of them:
+ * an AND-Join, OR-Join or SynchronizedActivity (spec 5.3). After that node only one token goes
+ * on, so nothing behind it is parallel any more. So the search walks forward from the first
+ * node of the branch, along every outgoing flow of every node it meets, and stops at that
+ * waiting node. It also stops at an End, where the run is over.
+ *
+ * Nesting: a branch may contain its own inner split and inner join. The inner join is NOT
+ * where our branch ends, so it must be walked through. The walk therefore counts: passing a
+ * splitting node (AND-Split, ForkActivity, OR-Split) adds 1, meaning "an inner split has
+ * opened"; reaching a waiting node with a count above 0 subtracts 1, meaning "it has closed
+ * again", and the walk goes on behind it. Only a waiting node reached with count 0 closes OUR
+ * branches, and the walk stops there.
+ *
+ * Example:
+ *              ┌─▶ X ─▶ inner AND-Split ─▶ p ─┐                         ┐
+ *              │                 └──────▶ q ─┴▶ inner AND-Join ─▶ Y ─┐  │ branch 1:
+ *    AND-Split ┤                                                     ├─▶ AND-Join
+ *              └─▶ Z ────────────────────────────────────────────────┘    branch 2: Z
+ *    Walking branch 1: X (count 0) → inner AND-Split (count becomes 1) → p, q → inner AND-Join
+ *    (reached with count 1, so it becomes 0 and the walk goes on) → Y → AND-Join (reached with
+ *    count 0: stop). Branch 1 is X, inner AND-Split, p, q, inner AND-Join, Y.
+ *
+ * A Decision inside a branch is walked through on all of its sides: whichever side a run
+ * takes, it still belongs to this branch. Loops end because every node is visited only once
+ * per count, and a count larger than the number of nodes is not followed.
+ *
+ * How the code works:
+ * The search keeps a to-do list (`queue`) of the nodes still to look at, each together with the
+ * count it is reached with. It starts with the branch's first node and count 0. Then, again and
+ * again, it takes the node at the FRONT of the list (`shift`), decides what to do with it (steps
+ * 1 to 6 in the code), and puts the nodes behind it at the BACK of the list (`push`). It is done
+ * when the list is empty. A node already handled with the same count is skipped (`seen`), which
+ * is what makes loops end and what keeps a node reached on two ways from being handled twice.
+ *
+ * Step by step for branch 1 of the example above, supposing that Y draws "lager":
+ *
+ *   to-do list before          taken out          what happens                                   put at the back
+ *   [X,0]                      X, 0               belongs to the branch                          [inner split,0]
+ *   [inner split,0]            inner split, 0     belongs to the branch; a split: count 0 → 1     [p,1] [q,1]
+ *   [p,1] [q,1]                p, 1               belongs to the branch                          [inner join,1]
+ *   [q,1] [inner join,1]       q, 1               belongs to the branch                          [inner join,1]
+ *   [inner join,1] [i. join,1] inner join, 1      a join reached with count 1: an INNER join,    [Y,0]
+ *                                                 count 1 → 0, it belongs to the branch
+ *   [inner join,1] [Y,0]       inner join, 1      already handled with count 1: skipped          –
+ *   [Y,0]                      Y, 0               belongs to the branch; draws lager             [AND-Join,0]
+ *                                                 → names = {lager}
+ *   [AND-Join,0]               AND-Join, 0        a join reached with count 0: OUR branches      –
+ *                                                 meet here; the branch ends before it
+ *   []                         –                  the list is empty: done, the result is {lager}
+ */
+function drawnInBranch(graph: SimulationGraph, branch: string, drawsAt: Map<string, string[]>): Set<string> {
+  const names = new Set<string>(); // the result: every variable drawn somewhere in this branch
+  const seen = new Set<string>(); // "node|count" pairs already handled, so a loop is not walked forever
+  const limit = Object.keys(graph.nodes).length; // more inner splits open at once than there are nodes is only possible in a loop
+
+  // The to-do list: nodes still to look at, each with the count it is reached with. It starts
+  // with the branch's first node (where the branch's first flow leads to) and count 0.
+  const queue: [string | null | undefined, number][] = [[graph.flows[branch]?.target, 0]];
+
+  while (queue.length > 0) {
+    // Step 1: take the next node from the front of the to-do list.
+    const [id, count] = queue.shift()!; // safe: the loop only runs while the list is not empty
+    const node = graph.nodes[id ?? ""]; // the node itself; undefined when the flow leads to no node
+
+    // Step 2: skip what needs no walking.
+    if (!node) continue; // the flow led to no node (check 1 reports that)
+    if (node.concept === "End") continue; // the run ends here, nothing behind it (check 24 reports a branch that does this)
+    if (count > limit) continue; // running away in a loop of splits
+    const key = `${node.id}|${count}`; // the same node may be met again with another count
+    if (seen.has(key)) continue; // already handled: this is what ends loops
+    seen.add(key); // remember it for next time
+
+    // Step 3: a waiting node is either the end of OUR branch or an inner join to walk through.
+    let inner = count; // the count for the nodes behind this one
+    if (WAITING_CONCEPTS.some((concept) => concept === node.concept)) {
+      if (count === 0) continue; // our parallel branches meet here: the branch ends BEFORE this node, so it is not collected
+      inner = count - 1; // an inner join: the inner split has closed again, walk on behind it
+    }
+
+    // Step 4: the node belongs to the branch: collect the variables drawn at it.
+    for (const name of drawsAt.get(node.id) ?? []) names.add(name);
+
+    // Step 5: an inner split opens: the next join reached belongs to it, not to our branches.
+    if (node.concept === "AND-Split" || node.concept === "ForkActivity" || node.concept === "OR-Split") inner += 1;
+
+    // Step 6: put every node behind this one at the back of the to-do list, with the new count.
+    for (const next of node.outgoing) queue.push([graph.flows[next]?.target, inner]);
+  }
+  return names; // the to-do list is empty: every node of the branch has been looked at
+}
+
+/**
+ * Check 24: splits and joins form matching pairs. There are two kinds of pairs:
+ * - OR pairs: an OR-Split and the OR-Join that collects its branches;
+ * - parallel pairs: an AND-Split or ForkActivity and the AND-Join or SynchronizedActivity that
+ *   collects its branches.
+ * (Thanks to check 9, part 2, no other node can split into parallel branches.)
+ *
+ * Why the check is needed: a join waits for a token on EVERY incoming flow (spec 5.3). The run
+ * only works if every join receives exactly one token per incoming flow, and every path
+ * carries exactly one token:
+ * - For OR pairs, a branch that is not taken sends a "skip token" to the flow where it enters
+ *   the OR-Join (spec 5.2, firing.ts, pairs.ts). That flow must be known and unique.
+ * - For parallel pairs, all branches run, and each must arrive at the join on its own input.
+ *   Otherwise a node where parallel branches meet without waiting would run once per branch,
+ *   or a branch ending at its own End would end the run while the others still run.
+ *
+ * How the check works, step by step (done once for each kind of pair):
+ * 1. branchEnds (pairs.ts) gives a lookup table "first flow of a branch -> what the walk along
+ *    that branch found". It walks along EVERY path of every branch, through nodes of every
+ *    type (both sides of a Decision, all sides of an inner split), until it reaches the
+ *    branch's own join; its comment explains how it handles nested pairs. For each branch it
+ *    tells: the flow where the branch enters its join (`end`), on how many different flows the
+ *    walk arrived at the join (`entryFlows`), and whether some path reached an End before the join
+ *    (`reachesEnd`).
+ * 2. For every split of this kind, collect the ends of its branches and check:
+ *    a) every branch has exactly one end, reached on every path. There are three ways to fail,
+ *       each with its own message:
+ *       - the branch "jumps out" of the pair (`reachesEnd`): some path of it reaches an End
+ *         before the join. It does not matter how: one side of a Decision inside the branch
+ *         leading to an End, the whole branch running into an End of its own (parallel
+ *         branches with separate Ends), or a flow that bypasses the join and runs to an End
+ *         behind it. The run is over as soon as a token reaches an End (spec 8), so whether
+ *         the elements of the other branches have run by then would depend on the order in
+ *         which the user advanced them, which spec 7 rules out. The fix is to decide before the
+ *         split or after the join. ADONIS and Bee-Up have the same rule ("each opened
+ *         parallelism must be closed by its own merge");
+ *       - the branch enters the join on several flows (more than one `entryFlows`), e.g. a Decision inside
+ *         the branch whose two sides go into the join separately. Then only one of those inputs
+ *         ever gets a token, and the join waits forever;
+ *       - the branch never reaches a join of this kind (no `entryFlows`);
+ *    b) all its branches end at the SAME join. That is what "pair" means;
+ *    c) no two of its branches end on the same flow. Each branch must fill its own input;
+ *       otherwise one input would get two tokens and another none.
+ * 3. Gather the ends of all splits of this kind in one set (allEnds). Then check:
+ *    d) every incoming flow of every join of this kind is in that set. An input that no branch
+ *       ends at is fed by nothing the join can rely on, so the join may wait for it forever.
+ *       This catches, for example, an AND-Join or OR-Join used to merge the branches of a
+ *       Decision: only one of those branches is ever taken.
+ *       An input on which a branch arrives that step 2 has already reported is left out here.
+ *       It is the same mistake seen from the join's side, and one mistake gets one message
+ *       (see the last example below).
+ *
+ * Example of a clean pair:
+ *               ┌─ b1 ─▶ A1 ── d1 ─┐
+ *    OR-Split ──┤                   ├─▶ OR-Join
+ *               └─ b2 ─▶ A2 ── d2 ─┘
+ *    Step 1: b1 -> d1, b2 -> d2. Step 2: (a) both ends found; (b) d1 and d2 lead into the same
+ *    OR-Join; (c) d1 and d2 differ. Step 3: allEnds = {d1, d2}; (d) the OR-Join's inputs d1
+ *    and d2 are both in it. The pair passes. A parallel pair is checked the same way.
+ *
+ * Example of a model that fails: an AND-Split whose two branches both run into one Activity X
+ * (which does not wait) and from there to the End. Every path of both branches reaches the
+ * End before any AND-Join, so step 1 finds `reachesEnd` for both branches, and (a) reports
+ * that each of them jumps out of the pair.
+ *
+ * Example of one mistake that must not be reported twice: in the upper branch, a Decision sends
+ * "nein" past the AND-Join straight to the element C behind it.
+ *
+ *                ┌─ fa ─▶ A ─▶ Decision ─┬─ ja ───────▶ AND-Join ─▶ C ─▶ End
+ *    AND-Split ──┤                        └─ nein ────────────────────▶ C       (bypasses the join)
+ *                └─ fb ─▶ B ─── fb2 ─────────────▶ AND-Join
+ *
+ *    Step 1: the walk along fa arrives at the join on "ja" (entryFlows = [ja]), but on the
+ *            "nein" path it passes C and reaches the End (reachesEnd), so this branch has no
+ *            end. The walk along fb ends at fb2.
+ *    Step 2: (a) reports that the branch along fa jumps out of the pair. Its input "ja" is
+ *            remembered as already reported.
+ *    Step 3: allEnds = {fb2}. The input "ja" is not in it, which (d) would report as "not the
+ *            end of a branch" — but "ja" was remembered in step 2, so it is left out. The user
+ *            gets one message, the one that says what to do.
+ */
+function checkPairs({ graph, nodes, report, describeFlow }: Context) {
+  for (const kind of [OR_PAIR, PARALLEL_PAIR]) {
+    const splitNames = kind.splits.join(" or "); // e.g. "AND-Split or ForkActivity", for the messages
+    const joinNames = kind.joins.join(" or "); // e.g. "AND-Join or SynchronizedActivity"
+    const ends = branchEnds(graph, kind); // step 1: first flow of a branch -> flow where it enters its join (the same function the firing rule uses)
+    const allEnds = new Set<string>(); // step 3: collects every branch end of every split of this kind
+    const alreadyReported = new Set<string>(); // join inputs reached by a branch that step 2 reported: step 3 leaves them out
+
+    // Step 2: every split of this kind, checked on its own.
+    for (const split of nodes.filter((node) => kind.splits.some((concept) => concept === node.concept))) {
+      const found: string[] = []; // the ends of this split's branches
+      for (const branch of split.outgoing) {
+        const result = ends.get(branch); // what the walk along this branch found (always present: every outgoing flow of a split is walked)
+        const which = `The branch of ${split.concept} "${split.label}" that starts with the ${describeFlow(graph.flows[branch])}`; // names the branch in every message
+        if (result?.end) {
+          found.push(result.end); // a clean branch: remember where it ends
+          continue; // nothing to report
+        }
+        for (const input of result?.entryFlows ?? []) alreadyReported.add(input); // the inputs this broken branch reaches: the same mistake, seen from the join
+        if (result?.reachesEnd) {
+          // (a) jumps out of the pair
+          report(24, split.id, `${which} jumps out of the pair: one of its paths reaches an End element before the ${joinNames}. The run would be over while the other branches are still under way. Decide before the split or after the join.`);
+        } else if (result && result.entryFlows.length > 1) {
+          // (a) several inputs
+          report(24, split.id, `${which} enters the ${joinNames} on ${result.entryFlows.length} different flows; it must arrive on exactly one, otherwise the join never gets a token on all its inputs.`);
+        } else {
+          // (a) no join at all
+          report(24, split.id, `${which} does not lead to an ${joinNames}.`);
+        }
+      }
+      if (new Set(found.map((end) => graph.flows[end].target)).size > 1) report(24, split.id, `The branches of ${split.concept} "${split.label}" end at different joins.`); // (b): a pair has one join; a Set keeps each join once
+      if (new Set(found).size < found.length) report(24, split.id, `Two branches of ${split.concept} "${split.label}" end on the same flow into the join.`); // (c): a Set smaller than the list means a repeated end
+      for (const end of found) allEnds.add(end); // remembered for step 3
+    }
+
+    // Step 3: every input of every join of this kind must be the end of some branch.
+    for (const join of nodes.filter((node) => kind.joins.some((concept) => concept === node.concept))) {
+      for (const input of join.incoming) {
+        if (!allEnds.has(input) && !alreadyReported.has(input)) {
+          report(24, join.id, `The ${describeFlow(graph.flows[input])} into ${join.concept} "${join.label}" is not the end of a branch of an ${splitNames}, so the ${join.concept} could wait for it forever.`); // (d)
+        }
       }
     }
   }

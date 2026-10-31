@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 import type { SceneInstance, SceneType } from "@gds";
 import { NAME_ATTRIBUTE_UUID } from "@/constants";
-import { parseDecimal, transformModel } from "./transformer";
+import { transformModel } from "./transformer";
 import type { ProcessSimulationMapping } from "./mapping";
 
 // ---------------------------------------------------------------------------------
@@ -202,15 +202,5 @@ describe("transformModel: rules", () => {
     const graph = transformModel(sceneType, model, mapped({ v: { concept: "Variable", data: { VariableName: "v-name" } }, w: { concept: "Variable" } }));
     expect(graph.variables.v.name).toBe("lager"); // trimmed, so " lager" in a condition is not a different variable
     expect(graph.variables.w.name).toBeNull(); // spec 10, check 3 reports it
-  });
-});
-
-describe("parseDecimal", () => {
-  it("reads a comma or a dot as decimal separator (plan 4)", () => {
-    expect([parseDecimal("0,8"), parseDecimal("0.8"), parseDecimal(" 1 "), parseDecimal(".5"), parseDecimal("-2,5")]).toEqual([0.8, 0.8, 1, 0.5, -2.5]);
-  });
-
-  it("returns null for anything that is not a plain decimal", () => {
-    expect([parseDecimal(""), parseDecimal("abc"), parseDecimal("1e3"), parseDecimal("0x10"), parseDecimal("1,2,3")]).toEqual([null, null, null, null, null]);
   });
 });

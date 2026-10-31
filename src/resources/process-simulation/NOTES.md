@@ -270,10 +270,81 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
 
 ---
 
-## For later phases
+## Decisions by phase (Phases 1 to 5)
 
-These are facts from Phase 0 that a later phase has to deal with. Each ends in the
-question that has to be answered there; none of them is decided here.
+### Phase 1: the metamodel "BPMN 2.0" (created by hand)
+
+- Classes `Start Event 2.0`, `End Event 2.0`, `Task 2.0`, `Exclusive Gateway 2.0`,
+  `Parallel Gateway 2.0`, `Inclusive Gateway 2.0`, `Variable 2.0`, each with `Name`.
+- Relation classes `Sequence Flow 2.0` (`Name`, `Transition Condition Table 2.0` with the
+  columns Variable | Operator | Value | Logical Operator) and `Random Generator 2.0` (the
+  plan's "Triggers": `Name`, `Distribution Type 2.0`, `Discrete Distribution Table 2.0` with
+  the columns Value | Probability).
+- New elements are named `Name`. Every new table starts with one row; in a condition table
+  it is Variable "", Operator "==", Value "", Logical Operator "-".
+- Known issues, to be fixed in the metamodel later: the target role of `Sequence Flow 2.0`
+  has `max = 1` for every class (no element can get two incoming flows, so no joins, merges
+  or loops can be drawn); the Operator and Logical Operator columns have
+  `ui_component = text` (no dropdown); the Operator facets contain `=>` instead of `>=`; the
+  Probability column has no minimum and maximum.
+
+### Phase 2: `vocabulary.ts`
+
+- Element and data concepts with their meanings, verbatim from spec 2.1 and 2.2;
+  `NODE_CONCEPTS` (spec 7), `WAITING_CONCEPTS` (spec 5.3), `DATA_CONCEPT_OWNERS` (spec 2.2).
+
+### Phase 3: the mapping (`mapping.ts`, `views/process-simulation/MappingDialog.tsx`)
+
+- Format: `{ sceneInstanceId, elements: { <element uuid>: { concept, data? } } }`; `data`
+  maps a data concept to the uuid of the element's own **attribute instance**. No version
+  field: a stored or imported text that does not have this shape is discarded whole.
+- Kept in localStorage, one entry per model (`process-simulation-mapping:<scene uuid>`),
+  saved on every change; export and import as a JSON file from the popup. A mapping of
+  another model is refused on import; entries for deleted elements are dropped (silently
+  when the popup opens, listed on import). The file stores uuids only, no names.
+- No separate store for the mapping: localStorage is the source of truth, later code calls
+  `loadMapping`. Server-side storage is future work (comment "FUTURE WORK" in `mapping.ts`).
+- No concepts are proposed from metaclass names.
+- Popup: menu **Process Simulation → Concept Mapping…**; one row per element with icon,
+  name, metaclass, and for relations "name (source → target)"; bendpoints hidden; status
+  "mapped" / "not mapped"; meanings as tooltips; the second dropdown is labelled with its
+  data concept. No attribute is preselected.
+
+### Phase 4: graph and transformer (`graph.ts`, `transformer.ts`)
+
+- `graph.ts` (with `vocabulary.ts` and the algorithms) is the part that can become a
+  library; `transformer.ts` is the MMAR adapter. No language-specific name appears in code.
+- Format rule: the attribute mapped as TransitionCondition is a table with the columns
+  1 variable, 2 operator, 3 value, 4 logical operator; the one mapped as Distribution a
+  table with 1 value, 2 probability. Column order = `sequence` in the metamodel.
+- Rows whose variable and value (or value and probability) are both empty are skipped;
+  half-filled rows are kept for the validator. Numbers are read with a comma or a dot.
+- A random generator's node and variable are found from the concepts of the line's ends,
+  in either direction. Generators drawn as elements of their own are not read (issue).
+- In the graph, `null` means "data concept not mapped" and `[]` "mapped but empty"; a flow
+  without condition rows is always taken. `ConditionRow.variableName` is a name, matched
+  against `GraphVariable.name`; `GraphGenerator.variable` is a uuid.
+- The transformer raises issues only for mistakes a user can make in the popup.
+
+### Phase 5: validator (`validator.ts`, `condition.ts`)
+
+- All 22 checks of spec 10; every failed check is an error, so the run does not start.
+- Check 2 includes the transformer's issues. Check 14 needs no code: a Distribution table
+  "value | probability" is discrete by its format, and `Distribution Type 2.0` is not read.
+  Check 17 requires an operator of `== != < <= > >=` and AND / OR after the first row.
+  Check 16 counts a variable as drawn at a join only if it is drawn on every incoming path.
+  Checks 20 to 22 try every combination of the values the variables can take.
+- `condition.ts` evaluates a condition (AND before OR, an undrawn variable is false,
+  `==` / `!=` compare text, `<` and `>` compare numbers) for the validator and the firing rule.
+- Limitations written up for the thesis: conflicts in Petri nets without data (preferred
+  fix: give the Petri net metamodel a variable, a random generator and a condition table on
+  arcs); only discrete distributions (preferred future extension: a data concept
+  `DistributionType`).
+
+## Findings of Phase 0 for later phases
+
+These were the open findings of Phase 0; they are answered in the section above, except
+highlighting and the store of the stepper, which belong to Phase 8.
 
 | Phase | Finding | Question |
 |---|---|---|
@@ -289,19 +360,14 @@ question that has to be answered there; none of them is decided here.
 | 8 | The only highlight is the single-selection `BoxHelper`; elements are found by mesh uuid. | How should active elements and token-carrying flows be highlighted? |
 | 8 | Stores live in `src/resources/store/`, one Zustand store per file. | Does the stepper store go there, or into `src/resources/process-simulation/`? |
 
-## Open questions carried over from the plan
+## Open questions of the plan (section 13)
 
-Unchanged from section 13 of the plan; the bold ones block their phase.
-
-| # | Phase | Question |
-|---|---|---|
-| 1 | 3 | Keep the mapping in `localStorage` as well? |
-| 2 | 3 | Propose concepts from the metaclass name? |
-| 3 | **4** | **How does the transformer recognise the individual table columns?** |
-| 4 | 5 | Which validator checks are errors, which warnings? |
-| 5 | **6** | **How does an `OR-Join` find the branches it waits for?** |
-| 6 | **6** | **Which variable values does the token keep at an `AND-Join`?** (to be settled with the supervisor) |
-| 7 | 6 | What happens when no step is possible but tokens are still under way? |
-
-Note for open question 4: section 10 of the specification lists **22** checks; section 7
-of the plan lists 8. Phase 5 has to settle which list is meant before it starts.
+| # | Phase | Question | Status |
+|---|---|---|---|
+| 1 | 3 | Keep the mapping in `localStorage` as well? | answered: yes |
+| 2 | 3 | Propose concepts from the metaclass name? | answered: no |
+| 3 | 4 | How does the transformer recognise the individual table columns? | answered: fixed column order (format rule) |
+| 4 | 5 | Which validator checks are errors, which warnings? | answered: all are errors; all 22 checks of spec 10 |
+| 5 | **6** | **How does an `OR-Join` find the branches it waits for?** | open |
+| 6 | **6** | **Which variable values does the token keep at an `AND-Join`?** | open (supervisor) |
+| 7 | 6 | What happens when no step is possible but tokens are still under way? | open |

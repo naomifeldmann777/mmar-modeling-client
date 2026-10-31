@@ -33,6 +33,7 @@ import { table_rows, type Attribute, type ClassInstance, type SceneInstance, typ
 import { NAME_ATTRIBUTE_UUID } from "@/constants";
 import type { ConditionRow, DistributionEntry, SimulationGraph } from "./graph";
 import type { ProcessSimulationMapping } from "./mapping";
+import { parseDecimal } from "./numbers"; // probabilities may be written with a comma or a dot
 import { NODE_CONCEPTS, type DataConcept, type ElementConcept, type NodeConcept } from "./vocabulary";
 
 const CONDITION_COLUMNS = ["variable", "operator", "value", "logical operator"]; // the format rule for a TransitionCondition table
@@ -165,16 +166,6 @@ export function transformModel(
   }
 
   return graph; // plain data from here on
-}
-
-/**
- * A number written with a comma or a dot as decimal separator, as plan 4 requires: "0,8"
- * and "0.8" both read as 0.8. null when the text is not such a number. Exported for the
- * firing rule, which compares condition values with <, <=, > and >=.
- */
-export function parseDecimal(text: string): number | null {
-  const normalized = text.trim().replace(",", "."); // one decimal comma becomes a dot
-  return /^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(normalized) ? Number(normalized) : null; // plain decimals only; Number alone would also accept "1e3" or "0x10"
 }
 
 /**

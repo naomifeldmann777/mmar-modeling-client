@@ -312,3 +312,229 @@ describe("validateGraph: conditions (checks 15 to 22)", () => {
     expect(validateGraph(g).map((p) => [p.check, p.elementId])).toEqual([[22, "or"]]); // two branches may both be taken at an OR-Split, so no check 20
   });
 });
+
+describe("validateGraph: beyond spec 10 (checks 23 and 24, added in Phase 6)", () => {
+  it("23: a variable is not drawn in two parallel branches", () => {
+    const g = graph({
+      nodes: [node("start", "Start"), node("split", "AND-Split"), node("a", "Activity"), node("b", "Activity"), node("join", "AND-Join"), node("end", "End")],
+      flows: [flow("f1", "start", "split"), flow("fa", "split", "a"), flow("fb", "split", "b"), flow("fa2", "a", "join"), flow("fb2", "b", "join"), flow("f2", "join", "end")],
+      generators: [draw("ga", "a", "lager", LAGER), draw("gb", "b", "lager", LAGER)], // lager drawn in both branches
+      variables: [variable("lager")],
+    });
+    expect(validateGraph(g).map((p) => [p.check, p.elementId])).toEqual([[23, "split"]]); // its value would depend on the order of the steps
+  });
+
+  it("24: an OR-Join used as a merge after a Decision has no OR-Split to send it skip tokens", () => {
+    const g = graph({
+      nodes: [node("start", "Start"), node("check", "Activity"), node("dec", "Decision"), node("x", "Activity"), node("y", "Activity"), node("join", "OR-Join"), node("end", "End")],
+      flows: [
+        flow("f1", "start", "check"), flow("f2", "check", "dec"),
+        flow("fx", "dec", "x", row("lager", "==", "ja")), flow("fy", "dec", "y", row("lager", "==", "nein")),
+        flow("x2", "x", "join"), flow("y2", "y", "join"), flow("f3", "join", "end"), // only one token ever arrives: the join would wait forever
+      ],
+      generators: [draw("g", "check", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+    expect(validateGraph(g).map((p) => [p.check, p.elementId])).toEqual([[24, "join"], [24, "join"]]); // both inputs are reported
+  });
+});
+
+describe("validateGraph: check 23 with nested parallel branches", () => {
+  it("finds a draw behind an inner AND-Split / AND-Join pair inside a branch", () => {
+    const g = graph({
+      nodes: [
+        node("start", "Start"), node("split", "AND-Split"), node("x", "Activity"), node("inner", "AND-Split"), node("p", "Activity"), node("q", "Activity"),
+        node("innerJoin", "AND-Join"), node("y", "Activity"), node("z", "Activity"), node("join", "AND-Join"), node("end", "End"),
+      ],
+      flows: [
+        flow("f1", "start", "split"), flow("b1", "split", "x"), flow("f2", "x", "inner"), flow("fp", "inner", "p"), flow("fq", "inner", "q"),
+        flow("fp2", "p", "innerJoin"), flow("fq2", "q", "innerJoin"), flow("f3", "innerJoin", "y"), flow("f4", "y", "join"), // branch 1, with an inner pair, then y
+        flow("b2", "split", "z"), flow("f5", "z", "join"), flow("f6", "join", "end"), // branch 2
+      ],
+      generators: [draw("gy", "y", "lager", LAGER), draw("gz", "z", "lager", LAGER)], // y (behind the inner join) and z both draw lager
+      variables: [variable("lager")],
+    });
+    expect(validateGraph(g).map((p) => [p.check, p.elementId])).toEqual([[23, "split"]]); // the walk passes the inner join and still sees y
+  });
+});
+
+describe("validateGraph: check 24 with a nested OR pair", () => {
+  it("accepts an OR-Split / OR-Join pair nested inside a branch of another one", () => {
+    //                ┌─ b1 [ja] ─▶ inner OR-Split ─┬─▶ x ─ x2 ─┐
+    //                │                              └─▶ y ─ y2 ─┴▶ inner OR-Join ─ e1 ─┐
+    //   outer OR-Split ┤                                                               ├─▶ outer OR-Join ─▶ end
+    //                └─ b2 [nein] ─▶ z ───────────────────────────────────── e2 ───────┘
+    const g = graph({
+      nodes: [
+        node("start", "Start"), node("check", "Activity"), node("outer", "OR-Split"), node("inner", "OR-Split"), node("x", "Activity"), node("y", "Activity"),
+        node("innerJoin", "OR-Join"), node("z", "Activity"), node("outerJoin", "OR-Join"), node("end", "End"),
+      ],
+      flows: [
+        flow("f1", "start", "check"), flow("f2", "check", "outer"),
+        flow("b1", "outer", "inner", row("lager", "==", "ja")), flow("b2", "outer", "z", row("lager", "==", "nein")), // the outer branches
+        flow("i1", "inner", "x"), flow("i2", "inner", "y"), // the inner branches, without conditions: both are always entered
+        flow("x2", "x", "innerJoin"), flow("y2", "y", "innerJoin"), flow("e1", "innerJoin", "outerJoin"), // the inner pair closes, then branch 1 ends at e1
+        flow("e2", "z", "outerJoin"), flow("f3", "outerJoin", "end"), // branch 2 ends at e2
+      ],
+      generators: [draw("g", "check", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+    expect(validateGraph(g)).toEqual([]); // both pairs are clean: inner ends x2 and y2, outer ends e1 and e2
+  });
+});
+
+describe("validateGraph: check 9, part 2 (exactly one outgoing flow)", () => {
+  it("refuses an Activity with two outgoing flows: splitting needs a split concept", () => {
+    const g = graph({ nodes: [node("start", "Start"), node("a", "Activity"), node("e1", "End"), node("e2", "End")], flows: [flow("f1", "start", "a"), flow("f2", "a", "e1"), flow("f3", "a", "e2")] });
+    const problems = validateGraph(g);
+    expect(problems.map((p) => [p.check, p.elementId])).toEqual([[9, "a"]]);
+    expect(problems[0].message).toContain("it may have only one");
+  });
+});
+
+describe("validateGraph: check 24 for parallel pairs", () => {
+  it("refuses parallel branches that meet at a node that does not wait (multi-merge)", () => {
+    const g = graph({
+      nodes: [node("start", "Start"), node("split", "AND-Split"), node("a", "Activity"), node("b", "Activity"), node("x", "Activity"), node("end", "End")],
+      flows: [flow("f1", "start", "split"), flow("fa", "split", "a"), flow("fb", "split", "b"), flow("fa2", "a", "x"), flow("fb2", "b", "x"), flow("f2", "x", "end")], // x would run twice
+    });
+    expect(validateGraph(g).map((p) => [p.check, p.elementId])).toEqual([[24, "split"], [24, "split"]]); // both branches reach the End without an AND-Join
+  });
+
+  it("refuses parallel branches that end at separate End elements", () => {
+    const g = graph({
+      nodes: [node("start", "Start"), node("split", "AND-Split"), node("a", "Activity"), node("b", "Activity"), node("e1", "End"), node("e2", "End")],
+      flows: [flow("f1", "start", "split"), flow("fa", "split", "a"), flow("fb", "split", "b"), flow("fa2", "a", "e1"), flow("fb2", "b", "e2")], // the run would end at the first End
+    });
+    expect(validateGraph(g).map((p) => [p.check, p.elementId])).toEqual([[24, "split"], [24, "split"]]);
+  });
+
+  it("refuses an AND-Join that merges the branches of a Decision", () => {
+    const g = graph({
+      nodes: [node("start", "Start"), node("check", "Activity"), node("dec", "Decision"), node("x", "Activity"), node("y", "Activity"), node("join", "AND-Join"), node("end", "End")],
+      flows: [
+        flow("f1", "start", "check"), flow("f2", "check", "dec"), flow("fx", "dec", "x", row("lager", "==", "ja")), flow("fy", "dec", "y", row("lager", "==", "nein")),
+        flow("x2", "x", "join"), flow("y2", "y", "join"), flow("f3", "join", "end"), // only one branch is ever taken: the join would wait forever
+      ],
+      generators: [draw("g", "check", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+    expect(validateGraph(g).map((p) => [p.check, p.elementId])).toEqual([[24, "join"], [24, "join"]]); // both inputs are reported
+  });
+
+  it("refuses a branch with a path that reaches an End before the join", () => {
+    // AND-Split → A → Decision → [ja] B → AND-Join; [nein] → End; and C → AND-Join.
+    const g = graph({
+      nodes: [node("start", "Start"), node("check", "Activity"), node("split", "AND-Split"), node("dec", "Decision"), node("b", "Activity"), node("early", "End"), node("c", "Activity"), node("join", "AND-Join"), node("end", "End")],
+      flows: [
+        flow("f1", "start", "check"), flow("f2", "check", "split"), flow("fa", "split", "dec"), flow("fja", "dec", "b", row("lager", "==", "ja")), flow("fnein", "dec", "early", row("lager", "==", "nein")),
+        flow("b2", "b", "join"), flow("fc", "split", "c"), flow("c2", "c", "join"), flow("f3", "join", "end"),
+      ],
+      generators: [draw("g", "check", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+    const problems = validateGraph(g).map((p) => [p.check, p.elementId]);
+    expect(problems).toContainEqual([24, "split"]); // with nein, the run would end while C is still under way
+  });
+});
+
+describe("validateGraph: check 24 messages name the reason", () => {
+  it("says that a branch jumps out of the pair, and how to fix it", () => {
+    const g = graph({
+      nodes: [node("start", "Start"), node("split", "AND-Split"), node("a", "Activity"), node("b", "Activity"), node("e1", "End"), node("e2", "End")],
+      flows: [flow("f1", "start", "split"), flow("fa", "split", "a"), flow("fb", "split", "b"), flow("fa2", "a", "e1"), flow("fb2", "b", "e2")], // separate Ends
+    });
+    const message = validateGraph(g)[0].message;
+    expect(message).toContain("jumps out of the pair: one of its paths reaches an End element before the AND-Join or SynchronizedActivity");
+    expect(message).toContain("Decide before the split or after the join.");
+  });
+
+  it("says that a branch enters the join on several flows", () => {
+    // Branch 1 contains a Decision whose two sides go into the OR-Join separately.
+    const g = graph({
+      nodes: [node("start", "Start"), node("check", "Activity"), node("or", "OR-Split"), node("dec", "Decision"), node("z", "Activity"), node("join", "OR-Join"), node("end", "End")],
+      flows: [
+        flow("f1", "start", "check"), flow("f2", "check", "or"),
+        flow("b1", "or", "dec", row("lager", "==", "ja")), flow("p", "dec", "join", row("lager", "==", "ja")), flow("q", "dec", "join", row("lager", "==", "nein")),
+        flow("b2", "or", "z", row("lager", "==", "nein")), flow("e2", "z", "join"), flow("f3", "join", "end"),
+      ],
+      generators: [draw("g", "check", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+    expect(validateGraph(g).find((p) => p.check === 24 && p.elementId === "or")?.message).toContain("enters the OR-Join on 2 different flows");
+  });
+});
+
+describe("validateGraph: check 25 (conditions only after a Decision or an OR-Split)", () => {
+  it("reports a condition on a flow that leaves an Activity, and nothing else about it", () => {
+    const g = modelA();
+    g.flows.f2.condition = [row("lagr", "==", "ja")]; // a condition after Check stock, with a typo on top
+    const problems = validateGraph(g);
+    expect(problems.map((p) => [p.check, p.elementId])).toEqual([[25, "f2"]]); // the typo is not reported as well: one mistake, one message
+    expect(problems[0].message).toContain('leaves Activity "check", where conditions are not evaluated');
+  });
+
+  it("does not report the empty default row of a new flow", () => {
+    expect(validateGraph(modelA())).toEqual([]); // f1 and f2 carry [] (the default row, skipped by the transformer)
+  });
+});
+
+describe("validateGraph: check 24 for an OR pair that is jumped out of", () => {
+  it("says that a branch of an OR-Split jumps out of the pair", () => {
+    // OR-Split → b1 → Decision → [ja] A → OR-Join; [nein] → End. And b2 → Z → OR-Join.
+    const g = graph({
+      nodes: [node("start", "Start"), node("check", "Activity"), node("or", "OR-Split"), node("dec", "Decision"), node("a", "Activity"), node("early", "End"), node("z", "Activity"), node("join", "OR-Join"), node("end", "End")],
+      flows: [
+        flow("f1", "start", "check"), flow("f2", "check", "or"),
+        flow("b1", "or", "dec", row("lager", "==", "ja")), flow("fja", "dec", "a", row("lager", "==", "ja")), flow("fnein", "dec", "early", row("lager", "==", "nein")), flow("a2", "a", "join"),
+        flow("b2", "or", "z", row("lager", "==", "nein")), flow("z2", "z", "join"), flow("f3", "join", "end"),
+      ],
+      generators: [draw("g", "check", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+    const message = validateGraph(g).find((p) => p.check === 24 && p.elementId === "or")?.message;
+    expect(message).toContain("jumps out of the pair: one of its paths reaches an End element before the OR-Join"); // the same rule as for parallel pairs
+  });
+});
+
+describe("validateGraph: check 24 reports one mistake once", () => {
+  //                ┌─ fa ─▶ A ─▶ Decision ─┬─ ja ───────▶ AND-Join ─▶ C ─▶ End
+  //    AND-Split ──┤                        └─ nein ────────────────────▶ C       (bypasses the join)
+  //                └─ fb ─▶ B ─── fb2 ─────────────▶ AND-Join
+  const g = () =>
+    graph({
+      nodes: [node("start", "Start"), node("check", "Activity"), node("split", "AND-Split"), node("a", "Activity"), node("dec", "Decision"), node("b", "Activity"), node("join", "AND-Join"), node("c", "Activity"), node("end", "End")],
+      flows: [
+        flow("f1", "start", "check"), flow("f2", "check", "split"), flow("fa", "split", "a"), flow("fa2", "a", "dec"),
+        flow("ja", "dec", "join", row("lager", "==", "ja")), flow("nein", "dec", "c", row("lager", "==", "nein")), // "nein" skips the join
+        flow("fb", "split", "b"), flow("fb2", "b", "join"), flow("fj", "join", "c"), flow("fc", "c", "end"),
+      ],
+      generators: [draw("g", "check", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+
+  it("reports a branch that bypasses the join once, on the split, and not again on the join's input", () => {
+    const problems = validateGraph(g()).filter((p) => p.check === 24);
+    expect(problems.map((p) => p.elementId)).toEqual(["split"]); // no second message for the input "ja"
+    expect(problems[0].message).toContain("jumps out of the pair"); // the message that says what to do
+  });
+
+  it("leaves a clean model without any message (control)", () => {
+    expect(validateGraph(modelA())).toEqual([]); // the skipping in step 3 hides nothing a clean model would need
+  });
+});
+
+describe("validateGraph: check 24 messages use the right article", () => {
+  it("writes 'an AND-Split or ForkActivity'", () => {
+    const g = graph({
+      nodes: [node("start", "Start"), node("check", "Activity"), node("dec", "Decision"), node("x", "Activity"), node("y", "Activity"), node("join", "AND-Join"), node("end", "End")],
+      flows: [
+        flow("f1", "start", "check"), flow("f2", "check", "dec"), flow("fx", "dec", "x", row("lager", "==", "ja")), flow("fy", "dec", "y", row("lager", "==", "nein")),
+        flow("x2", "x", "join"), flow("y2", "y", "join"), flow("f3", "join", "end"),
+      ],
+      generators: [draw("g", "check", "lager", LAGER)],
+      variables: [variable("lager")],
+    });
+    expect(validateGraph(g)[0].message).toContain("is not the end of a branch of an AND-Split or ForkActivity");
+  });
+});

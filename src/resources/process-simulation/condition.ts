@@ -19,7 +19,7 @@
  *   with a comma or a dot (plan 4). A value that is not a number makes such a row false.
  */
 import type { ConditionRow } from "./graph"; // the rows as the transformer reads them
-import { parseDecimal } from "./transformer"; // the one reader for numbers with a comma or a dot
+import { parseDecimal } from "./numbers"; // the one reader for numbers with a comma or a dot
 
 /** The comparison operators a condition row may use (spec 10, checks 17 and 19). */
 export const COMPARISON_OPERATORS = ["==", "!=", "<", "<=", ">", ">="] as const; // the validator checks rows against this list
