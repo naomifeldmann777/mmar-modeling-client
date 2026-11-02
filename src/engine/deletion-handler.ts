@@ -53,6 +53,7 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
    * the object the user had deselected by clicking empty canvas.
    */
   async onPressDelete() {
+    if (!this.globalStateObject.canEdit()) return; // e.g. ProcessSimulationMode: nothing is deleted
     const selectedInstance = this.globalSelectedObject.getSelectedInstance();
     if (!selectedInstance) {
       this.logger.log("nothing is selected, delete skipped", "info");

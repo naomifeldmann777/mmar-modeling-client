@@ -13,6 +13,7 @@ import { describeError } from "@/resources/util/describe-error";
 import { sharedDocService } from "@/resources/collaboration/shared-doc-service";
 import { applyLocalChangeToYDoc, type LocalChangeType } from "@/resources/collaboration/y-mapping";
 import { useHistoryStore } from "@/resources/store/historyStore";
+import { globalStateObject } from "@/engine/global-state-object"; // whether the active mode lets the model be changed
 import { useSelectionStore } from "@/resources/store/selectionStore";
 import { useTabsStore } from "@/resources/store/tabsStore";
 import {
@@ -216,6 +217,7 @@ export class HistoryService {
    * entry we are moving onto.
    */
   private async travel(delta: -1 | 1): Promise<void> {
+    if (!globalStateObject.canEdit()) return; // undo and redo change the model; e.g. ProcessSimulationMode does not allow that
     // On the draw lane: replaying a step redraws through the shared graphic context, so
     // it must not interleave with a click or with a peer's arriving change (see
     // draw-lock). `applying` still guards re-entry — it is what stops the replay from

@@ -270,7 +270,7 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
 
 ---
 
-## Decisions by phase (Phases 1 to 5)
+## Decisions by phase (Phases 1 to 8)
 
 ### Phase 1: the metamodel "BPMN 2.0" (created by hand)
 
@@ -332,7 +332,9 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
 - Check 2 includes the transformer's issues. Check 14 needs no code: a Distribution table
   "value | probability" is discrete by its format, and `Distribution Type 2.0` is not read.
   Check 17 requires an operator of `== != < <= > >=` and AND / OR after the first row.
-  Check 16 counts a variable as drawn at a join only if it is drawn on every incoming path.
+  Check 16 counts a variable as drawn where paths meet only if it is drawn on every incoming
+  path; at an AND-Join or SynchronizedActivity (all branches have run) on any of them
+  (changed in Phase 7, after the one value store per run of Phase 6).
   Checks 20 to 22 try every combination of the values the variables can take.
 - `condition.ts` evaluates a condition (AND before OR, an undrawn variable is false,
   `==` / `!=` compare text, `<` and `>` compare numbers) for the validator and the firing rule.
@@ -341,10 +343,73 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
   arcs); only discrete distributions (preferred future extension: a data concept
   `DistributionType`).
 
+### Phase 6: firing rule (`firing.ts`, `pairs.ts`, `numbers.ts`)
+
+- Open question 5: OR-Split and OR-Join follow spec 5.2 literally. A branch that is not
+  taken gets a skip token on the flow where it enters its OR-Join (`pairs.ts` finds that
+  flow by walking the branch, nesting-aware); the OR-Join then waits like an AND-Join.
+- Open question 6: one value store per run (plan 6). A draw is visible everywhere at once.
+- `possibleSteps` (operation 1) and `executeStep` (operation 2) work on the graph; no Petri
+  net is built. A node that does not wait takes the token of the input it arrived on.
+- `pairs.ts` and `numbers.ts` were split out so the validator does not depend on the firing
+  rule. Library files (vocabulary, graph, numbers, condition, pairs, firing, validator,
+  stepper, mapping) import only each other; `transformer.ts` is the only MMAR adapter.
+- New validator checks beyond spec 10: 23 (no variable drawn in two parallel branches, nor
+  by two generators at one node), 24 (splits and joins form matching pairs: every branch
+  ends at exactly one input of its join on every path, no path jumps out to an End, every
+  join input is a branch end of one and the same split, no flow leads into a branch from
+  outside the pair), 25 (conditions only on outgoing flows of a Decision or OR-Split).
+  Check 9 also requires exactly one outgoing flow for Start, Activity and the joins.
+
+### Phase 7: stepper (`stepper.ts`) and further checks
+
+- `startRun` validates first; `takeStep` carries out the picked step; `runStatus` is
+  `running`, `finished` (an End was reached) or `noStep`.
+- The stepper waits for the user after every step, even when only one step is possible, so
+  the user can follow the token. This deviates on purpose from spec 8 ("executed directly").
+- Open question 7: when no step is possible, the stepper says so in neutral words: "The run
+  is over." or "No further step is possible." (never "deadlock").
+- New check 26: every loop can be left. Every loop is checked on its own (also loops inside
+  loops): its conditions must read a variable that is drawn again on the loop; a loop through
+  an AND-Join or SynchronizedActivity counts the draws of all branches of that pair.
+- Limitation written up: checks 20 to 22 and 26 do not know which values can reach an
+  element, so they may raise a false alarm, but never miss a real problem.
+- `readMappableModel` moved from the popup into `transformer.ts`: popup and stepper both need
+  the element list to load and check the stored mapping.
+
+### Phase 8: stepper user interface
+
+- `resources/store/processSimulationStore.ts` holds the open stepper (run, problems,
+  message); it is pure state. The mapping stays in localStorage: it must survive a reload,
+  a run must not.
+- `views/process-simulation/stepper-session.ts`: started from "Process Simulation → Stepper",
+  it reads the open model, loads the mapping, builds the graph, opens the store and switches
+  to ProcessSimulationMode; "Stop simulation" goes back to ViewMode. A tab change, another
+  mode, an edit by another user of a shared model (`remoteSceneInstanceChanged`, also a mere
+  move) or a local change announced as `sceneInstanceMutated` stops the run with a message.
+- The lock is a mode like the others: engine mode 5 "ProcessSimulationMode" (look only).
+  Every mode says whether it is `editable`; only mode 5 is not, so Delete, undo/redo, the
+  arrow keys and the Algorithms dialog (which ask `globalStateObject.canEdit()`) do nothing there. The engine does not
+  know the stepper. The 2D/3D switch and "Reset View" keep a non-editable mode (they only
+  change the camera; `isEditable()` asks without a pop-up). Choosing another mode leaves mode 5
+  like any mode; the stepper notices
+  (stateStore) and stops its run with a message. The attribute window is replaced by the
+  stepper panel while the stepper is open.
+- `StepperPanel.tsx` (right column, instead of the attribute window): status, possible
+  steps as buttons (drawn values with their probability, the target at a Decision or
+  OR-Split), variable values, flows with tokens, trace, Restart, Stop simulation.
+- `stepper-highlight.ts`: a bright, luminous green glow around nodes that can run now, a pale,
+  matte green glow around the node that ran last (one see-through band with rounded corners, like a highlighter; WebGL draws
+  plain lines only one pixel wide), each token as a black dot with a white rim on its flow,
+  just in front of the element it waits for (with a number when several lie there), and a label
+  "variable = value" to the right of each variable that has a value (not at the random
+  generator, where it covered the node). Labels keep their size until the next step.
+- Logging out resets the store (`session-reset.ts`).
+
 ## Findings of Phase 0 for later phases
 
 These were the open findings of Phase 0; they are answered in the section above, except
-highlighting and the store of the stepper, which belong to Phase 8.
+highlighting and the store of the stepper, answered in Phase 8.
 
 | Phase | Finding | Question |
 |---|---|---|
@@ -368,6 +433,6 @@ highlighting and the store of the stepper, which belong to Phase 8.
 | 2 | 3 | Propose concepts from the metaclass name? | answered: no |
 | 3 | 4 | How does the transformer recognise the individual table columns? | answered: fixed column order (format rule) |
 | 4 | 5 | Which validator checks are errors, which warnings? | answered: all are errors; all 22 checks of spec 10 |
-| 5 | **6** | **How does an `OR-Join` find the branches it waits for?** | open |
-| 6 | **6** | **Which variable values does the token keep at an `AND-Join`?** | open (supervisor) |
-| 7 | 6 | What happens when no step is possible but tokens are still under way? | open |
+| 5 | **6** | **How does an `OR-Join` find the branches it waits for?** | answered: skip tokens as in spec 5.2 |
+| 6 | **6** | **Which variable values does the token keep at an `AND-Join`?** | answered: one value store per run; check 23 |
+| 7 | 6 | What happens when no step is possible but tokens are still under way? | answered: neutral message "No further step is possible." |

@@ -23,7 +23,12 @@ const mocks = vi.hoisted(() => {
       transformControls: { camera: cam2d, setMode: vi.fn() },
       camera: cam2d,
     },
-    globalStateObject: { setState: vi.fn() },
+    globalStateObject: {
+      setState: vi.fn(),
+      isEditable: vi.fn(() => true), // an ordinary mode, unless a test says otherwise
+      getState: vi.fn(() => "ProcessSimulationMode"),
+      stateNames: ["SelectionMode (drag)", "ViewMode", "DrawingMode (insert)", "DrawingModeRelationClass (line)", "SimulationMode", "ProcessSimulationMode"],
+    },
     logger: { log: vi.fn() },
   };
 });
@@ -44,6 +49,14 @@ beforeEach(() => {
 });
 
 describe("CameraToggle", () => {
+  it("keeps a mode in which the model cannot be edited, instead of going to view mode", () => {
+    mocks.globalStateObject.isEditable.mockReturnValueOnce(false); // e.g. the process-simulation stepper is open
+    render(<CameraToggle />);
+    fireEvent.click(screen.getByRole("button", { name: "Reset View" }));
+    expect(mocks.globalStateObject.setState).toHaveBeenCalledWith(5); // ProcessSimulationMode set again, the run goes on
+    expect(mocks.globalStateObject.setState).not.toHaveBeenCalledWith(1);
+  });
+
   it("switches the world to 3D via engine.setThreeDimensional", () => {
     // engine.setThreeDimensional is mocked, so emulate its effect on the flag.
     mocks.engine.setThreeDimensional.mockImplementation((is3d: boolean) => {

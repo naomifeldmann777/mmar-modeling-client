@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   engine: { isInitialized: false },
   globalSelectedObject: { removeObject: vi.fn() },
   globalStateObject: { setState: vi.fn() },
+  startStepper: vi.fn(), // the Stepper entry of the Process Simulation menu
   persistencyHandler: {
     saveToTextfile: vi.fn(async (): Promise<void> => undefined),
     saveAllOpenModelInstancesToTextfile: vi.fn(async (): Promise<void> => undefined),
@@ -25,6 +26,11 @@ vi.mock("@/engine", () => ({
 // global-definition (a WebGLRenderer at module scope) unless it is mocked here.
 vi.mock("@/resources/services/persistency-handler", () => ({
   persistencyHandler: mocks.persistencyHandler,
+}));
+// The Stepper entry starts the process-simulation stepper; only the wiring is tested here
+// (stepper-session.test covers what starting does).
+vi.mock("@/views/process-simulation/stepper-session", () => ({
+  startStepper: mocks.startStepper,
 }));
 
 import TopNavBar from "./TopNavBar";
@@ -114,8 +120,15 @@ describe("TopNavBar", () => {
   it("opens the concept-mapping popup from the Process Simulation menu", () => {
     render(<TopNavBar />); // the menu bar as the user sees it
     fireEvent.click(screen.getByRole("button", { name: "Process Simulation" })); // open the new menu
-    fireEvent.click(screen.getByText("Concept Mapping…")); // its only entry so far
+    fireEvent.click(screen.getByText("Concept Mapping…")); // its first entry
     expect(useUiStore.getState().dialogs.processSimulationMapping).toBe(true); // the popup opens through uiStore
     expect(mocks.globalStateObject.setState).not.toHaveBeenCalled(); // and the interaction mode is left alone
+  });
+
+  it("starts the stepper from the Process Simulation menu", () => {
+    render(<TopNavBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Process Simulation" }));
+    fireEvent.click(screen.getByText("Stepper"));
+    expect(mocks.startStepper).toHaveBeenCalledTimes(1); // stepper-session reads the model and opens the panel
   });
 });

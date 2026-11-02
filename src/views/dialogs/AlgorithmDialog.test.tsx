@@ -39,6 +39,7 @@ vi.mock("@/resources/collaboration/local-change-publisher", () => ({
 
 const { default: AlgorithmDialog } = await import("@/views/dialogs/AlgorithmDialog");
 const { useUiStore } = await import("@/resources/store/uiStore");
+const { globalStateObject } = await import("@/engine/global-state-object");
 
 function closeEveryDialog() {
   const dialogs = useUiStore.getState().dialogs;
@@ -170,6 +171,24 @@ describe("AlgorithmDialog", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "run" })[1]);
 
     await waitFor(() => expect(mocks.procedureUtility.execute).toHaveBeenCalledWith("", "Robot check"));
+  });
+
+  it("does not run in a mode that does not allow editing the model", async () => {
+    mocks.procedureUtility.getGeneralProcedures.mockResolvedValue([{ name: "Layout" }]);
+    render(<AlgorithmDialog />);
+    act(() => useUiStore.getState().openDialog("algorithm"));
+    await waitFor(() => expect(mocks.procedureUtility.getGeneralProcedures).toHaveBeenCalled());
+    await openSelect(0);
+    fireEvent.click(screen.getByText("Layout"));
+
+    globalStateObject.activeState = "ProcessSimulationMode"; // the process-simulation stepper is open
+    try {
+      fireEvent.click(screen.getAllByRole("button", { name: "run" })[0]);
+      expect(mocks.procedureUtility.execute).not.toHaveBeenCalled();
+      expect(mocks.logger.log).toHaveBeenCalledWith(expect.stringContaining("cannot be edited in ProcessSimulationMode"), "error"); // "error": shown as a pop-up
+    } finally {
+      globalStateObject.activeState = ""; // the next tests run in no particular mode
+    }
   });
 
   it("cannot run with nothing selected", async () => {

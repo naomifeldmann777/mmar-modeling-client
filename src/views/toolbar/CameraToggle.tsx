@@ -16,10 +16,14 @@ export default function CameraToggle() {
   const [is3d, setIs3d] = useState(globalObject.threeDimensional);
 
   // Back to view mode, with the active camera's position, zoom and orbit controls
-  // returned to their saved state.
+  // returned to their saved state. A mode in which the model cannot be edited (the
+  // process-simulation stepper's) is kept instead: it only allows looking anyway, and
+  // leaving it would end the run. It is set again, so the camera just switched to gets
+  // that mode's control settings too.
   function resetView() {
     if (!engine.isInitialized) return;
-    globalStateObject.setState(1);
+    const mode = globalStateObject.isEditable() ? 1 : globalStateObject.stateNames.indexOf(globalStateObject.getState()); // ViewMode, or the look-only mode we are in
+    globalStateObject.setState(mode);
     if (!globalObject.threeDimensional) {
       globalObject.normalCamera2d.position.set(0, 0, 10);
       globalObject.normalCamera2d.zoom = 1;

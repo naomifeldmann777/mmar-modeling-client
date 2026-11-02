@@ -8,6 +8,7 @@ import { historyService } from "@/resources/services/history-service";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import { hasCommandModifier } from "@/resources/util/platform";
+import { globalStateObject } from "@/engine/global-state-object"; // whether the active mode lets the model be changed
 
 /**
  * The app's keyboard shortcuts. Mount this ONCE, from the app shell: the effect adds a
@@ -33,6 +34,7 @@ export function useKeyboardShortcuts(): void {
     // engine's selected mesh directly (globalSelectedObject.object) so we never call
     // getObject() — which would touch the box helper — when there is no selection.
     const nudge = (axis: "x" | "y", delta: number, precision: number) => {
+      if (!globalStateObject.canEdit()) return; // e.g. ProcessSimulationMode: nothing is moved
       if (!globalSelectedObject.object) return;
       const object = globalSelectedObject.getObject();
       mathUtility.roundPosOfObject(object, precision);

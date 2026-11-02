@@ -44,7 +44,7 @@ vi.mock("@/resources/services/backend-service", () => ({ backendService: mocks.b
 // transformControls / orbitControls / the DOM container, none of which the faked
 // globalObject has. globalSelectedObject stays REAL — it is the thing under test.
 vi.mock("@/engine/global-state-object", () => ({
-  globalStateObject: { activeStateLine: undefined, setState: vi.fn() },
+  globalStateObject: { activeStateLine: undefined, setState: vi.fn(), canEdit: () => true }, // an editable mode: these tests are about the selection
 }));
 
 const { deletionHandler } = await import("./deletion-handler");
