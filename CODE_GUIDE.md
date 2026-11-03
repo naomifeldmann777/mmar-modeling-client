@@ -427,7 +427,9 @@ you mutate a mesh, set it (or wait up to a second for the heartbeat). Each drawn
 1. re-fits collaborators' selection boxes and cursors, which follow objects peers move
    and keep their labels at a constant screen size;
 2. renders;
-3. runs the open scene's **mechanisms** if `runMechanism` is set;
+3. runs the open scene's **mechanisms** if `runMechanism` is set. Each runs on its own:
+   one that throws is logged once and the others still run, because a throw here would
+   skip step 5, and a relation drawn after that would never get a line;
 4. snapshots every drag object's position, quaternion and scale into flat arrays and
    compares them with the previous frame's (positions with a tolerance of 0.01,
    rotations and scales with 1e-4);
@@ -459,7 +461,7 @@ route actually changed.
 | 0 | `SelectionMode (drag)` | picks an object: attaches the transform gizmo (left = translate, right = scale, middle = rotate in 3D) and shows its attributes. Empty space → ViewMode. | on | off | grab |
 | 1 | `ViewMode` | moves the camera only; clicking an object switches to SelectionMode and picks it | off | on | pointer |
 | 2 | `DrawingMode (insert)` | drops an instance of the armed palette class at the plane hit (rounded to 0.1), with its ports and attributes | off | on | copy |
-| 3 | `DrawingModeRelationClass (line)` | the first click on an object starts a relation; clicks on empty space add bendpoints; a click on a second object closes it; right-click abandons it | off | on | copy |
+| 3 | `DrawingModeRelationClass (line)` | the first click on an object starts a relation; clicks on empty space add bendpoints; a click on a second object closes it (a click back on the first is refused without a bendpoint between, as that line has nowhere to go); right-click abandons it | off | on | copy |
 | 4 | `SimulationMode` | runs the clicked *button* object's simulation code | off | on | help |
 
 The engine boots in SelectionMode, and a right-click generally drops back to ViewMode.
@@ -532,6 +534,12 @@ loop while `runMechanism` is set; `mechanism-utility`), **procedures** (the Algo
 dialog; `procedure-utility`) and **simulations** (button objects clicked in
 SimulationMode; `simulation-utility`).
 
+A procedure's only reach into the app is that API, so three calls exist just for it:
+`log` writes to the log window, `loadAllSceneInstances` fills the lazy scene tree so a
+reference into another scene can be followed, and `getInstanceByUUID` reads an instance that
+no relation leads to. AlgorithmDialog marks the scene dirty after a run, because a procedure
+writes straight onto the gds objects, which flags nothing.
+
 What follows from this:
 
 - **The `graphic-context` and `expression-utility` method surfaces are an API.** Code
@@ -546,7 +554,8 @@ What follows from this:
   uuid appears as a substring** of the vizRep source. Before the re-run it drops the
   custom variables that are not `user_locked`, so computed values get recomputed while a
   label the user dragged by hand (which `transform-control-events` marks locked) stays
-  where it was put.
+  where it was put. Afterwards it sets `objectScaled`, because a redraw can change the
+  outline that relations end on.
 - **Some metamodels have behaviour outside the vizRep pipeline**, the *hybrid
   algorithms* in [engine/hybrid-algorithms/](src/engine/hybrid-algorithms/):
   - Robotic system: a zipped URDF (File ▸ Map file to SceneInstance) becomes Link and
@@ -1046,7 +1055,10 @@ as plain functions, so it can be tested without rendering.
   split on `|`), or an upload button. The branches are independent, not an if/else
   chain: a File attribute renders its text field *and* its buttons. Edits follow
   **commit-on-blur**: keystrokes change local state; blur, Enter, slider release or a
-  dropdown pick validates and then calls `applyFieldChange`.
+  dropdown pick validates and then calls `applyFieldChange`. The `multi-line` UI
+  component, for values with line breaks such as a mechanism's code, gets a textarea,
+  where Enter is a line break: a single-line input drops line breaks, and saving a
+  mechanism as one line comments out its code. Table cells honour it too.
 - **`applyFieldChange` is the reference implementation of "an edit"**: normalize the
   value, request a vizRep update, run the hybrid algorithms, `publishLocalChange`,
   `markActiveSceneDirty()`, record an undo step. Copy its shape for new kinds of edit.
@@ -1063,7 +1075,12 @@ as plain functions, so it can be tested without rendering.
   [ReferenceAttributeDialog](src/views/attribute-window/ReferenceAttributeDialog.tsx)
   is **one dialog shared by every reference button**; the clicked attribute arrives on
   `openReferenceDialog`, and choosing a target creates the role instance that records
-  the reference.
+  the reference, then announces the edit (redraw, dirty flag, undo step, `revision`).
+  A table column is a reference column by the same rule as an attribute, its type
+  carrying a Role, whatever its `ui_component`, and its cells open the same dialog. That
+  is how one attribute holds several references, since a reference attribute has room for
+  one role instance; the column's attribute travels on the payload because it is on no
+  class the dialog could find its Role through.
 
 ### [SimulationWindow.tsx](src/views/simulation-window/SimulationWindow.tsx)
 
@@ -1212,8 +1229,10 @@ Scripts: `npm run dev` (port 8085), `build` (`tsc --noEmit && vite build`), `tes
 
 ## Tests
 
-`npm run test` → **707 tests across 76 files, all green** (22 September 2026, with
-`mmar-server` and `mmar-sync-server` reachable). Vitest defaults to the `node`
+`npm run test` runs 80 files; 7 of them are `*.integration.test.ts`, which need
+`mmar-server` and `mmar-sync-server` reachable and write to that server. Without them,
+`npx vitest run --exclude "**/*.integration.test.ts"` → **727 tests across 73 files, all
+green** (3 November 2026). Vitest defaults to the `node`
 environment; component suites opt into jsdom per file with a
 `// @vitest-environment jsdom` docblock. [src/test-setup.ts](src/test-setup.ts) imports `reflect-metadata` first
 (mirroring `main.tsx`) and polyfills `Blob.text()` / `arrayBuffer()`, which jsdom lacks.

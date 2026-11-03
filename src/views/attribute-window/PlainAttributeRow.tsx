@@ -162,6 +162,10 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
   }
 
   const showTextField = facets.length === 0 && !isObject3d && !isImage;
+  // The "multi-line" UI component, for values with line breaks such as a mechanism's
+  // code. A single-line input drops line breaks from what it holds, so editing such a
+  // value in one saved it as one line.
+  const multiline = lowerUiType === "multi-line";
   const isSlider = facets.length > 0 && lowerUiType === "slider";
   const isDropdown = facets.length > 0 && lowerUiType === "dropdown";
   const valueIsFileUuid = uuidValidate(attributeInstance.value);
@@ -174,13 +178,16 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
           fullWidth
           size="small"
           label={attributeInstance.name}
-          type={uiType || "text"}
+          type={multiline ? undefined : uiType || "text"}
+          multiline={multiline}
+          maxRows={multiline ? 8 : undefined}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             // Enter commits without waiting for blur, so the scene vizrep updates
-            // immediately, matching how a plain <input> commits on Enter.
-            if (e.key === "Enter") {
+            // immediately, matching how a plain <input> commits on Enter. In a textarea
+            // it is a line break, and the value is committed on blur.
+            if (e.key === "Enter" && !multiline) {
               e.preventDefault();
               commit((e.target as HTMLInputElement).value);
             }

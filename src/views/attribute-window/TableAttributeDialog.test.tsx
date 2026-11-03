@@ -7,7 +7,7 @@
 // saved and recorded as one undo step each. Creating the cells themselves (defaults,
 // nested tables) is the engine's, tested in instance-creation-handler.test.ts.
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { AttributeInstance } from "@gds";
 
 const mocks = vi.hoisted(() => ({
@@ -48,6 +48,7 @@ vi.mock("@/resources/services/meta-utility", () => ({ metaUtility: mocks.metaUti
 
 import TableAttributeDialog from "./TableAttributeDialog";
 import { eventBus } from "@/resources/services/event-bus";
+import { useSelectionStore } from "@/resources/store/selectionStore";
 import { useUiStore } from "@/resources/store/uiStore";
 import { useLogStore } from "@/resources/store/logStore";
 import { NOT_ALLOWED_MESSAGE } from "@/resources/services/metamodel-constraints";
@@ -141,6 +142,31 @@ function floatColumnMetaAttribute() {
             default_value: "0",
             facets: "",
             attribute_type: { uuid: "at-float", name: "Float", regex_value: FLOAT_REGEX, has_table_attribute: [] },
+          },
+        },
+      ],
+    },
+  };
+}
+
+/** A table of one reference column: how one attribute holds several references. */
+function referenceColumnMetaAttribute() {
+  return {
+    uuid: TABLE_ATTRIBUTE_UUID,
+    name: "Targets",
+    attribute_type: {
+      uuid: "at-table",
+      has_table_attribute: [
+        {
+          sequence: 1,
+          // A reference column by its type's Role alone, like a reference attribute.
+          ui_component: "text",
+          attribute: {
+            uuid: "col-attr-1",
+            name: "Target",
+            default_value: "",
+            facets: "",
+            attribute_type: { uuid: "at-ref", role: { uuid: "role-1" }, has_table_attribute: [] },
           },
         },
       ],
@@ -335,6 +361,24 @@ describe("TableAttributeDialog", () => {
     expect(mocks.globalObject.doSceneInstancePatch).toBe(true);
   });
 
+  it("edits a multi-line column in a textarea, which keeps line breaks", async () => {
+    const metaAttribute = tableMetaAttribute();
+    metaAttribute.attribute_type.has_table_attribute[0].ui_component = "multi-line";
+    mocks.metaUtility.getMetaClass.mockResolvedValue({ uuid: "class-1", attributes: [metaAttribute] });
+    const attributeInstance = openWith([
+      cellJson({ uuid: "cell-1", value: "one\ntwo" }),
+      cellJson({ uuid: "cell-2", uuid_attribute: "col-attr-2", value: "x" }),
+    ]);
+
+    render(<TableAttributeDialog />);
+    const field = await screen.findByDisplayValue("one\ntwo", { normalizer: (text) => text });
+    expect(field.tagName).toBe("TEXTAREA");
+    fireEvent.change(field, { target: { value: "one\ntwo\nthree" } });
+    fireEvent.blur(field);
+
+    await waitFor(() => expect(attributeInstance.table_attributes[0].value).toBe("one\ntwo\nthree"));
+  });
+
   // Cells are saved as part of the scene instance, so a cell value the rule engine
   // refuses fails the same autosave with the same 403 as a plain attribute. The cell is
   // checked against the attribute type of ITS COLUMN.
@@ -381,5 +425,67 @@ describe("TableAttributeDialog", () => {
     await waitFor(() => expect(screen.getByDisplayValue("new Column A")).toBeTruthy());
     expect(mocks.globalObject.doSceneInstancePatch).toBe(true);
     expect(mocks.historyService.record).toHaveBeenCalledWith("add table row");
+  });
+
+  describe("reference columns", () => {
+    beforeEach(() => {
+      mocks.metaUtility.getMetaClass.mockResolvedValue({ uuid: "class-1", attributes: [referenceColumnMetaAttribute()] });
+    });
+
+    it("treats a column whose type has a Role as references, whatever its UI component", async () => {
+      openWith([cellJson()]);
+
+      render(<TableAttributeDialog />);
+
+      expect(await screen.findByRole("button", { name: "select" })).toBeTruthy();
+      expect(screen.queryByRole("textbox")).toBeNull();
+    });
+
+    it("shows the referenced name, and nothing for an empty cell", async () => {
+      openWith([
+        cellJson({
+          uuid: "set",
+          value: "Outer Wall - North",
+          table_row: 0,
+          role_instance_from: { uuid: "ri-1", name: "Outer Wall - North" },
+        }),
+        cellJson({ uuid: "empty", value: "...", table_row: 1 }),
+      ]);
+
+      render(<TableAttributeDialog />);
+
+      expect(await screen.findByText("Outer Wall - North")).toBeTruthy();
+      expect(screen.queryByText("...")).toBeNull();
+      expect(screen.getAllByRole("button", { name: "select" })).toHaveLength(2);
+    });
+
+    it("opens the shared reference dialog on the cell, with its column's attribute", async () => {
+      const opened = vi.fn();
+      const subscription = eventBus.subscribe("openReferenceDialog", opened);
+      const attributeInstance = openWith([cellJson()]);
+
+      render(<TableAttributeDialog />);
+      fireEvent.click(await screen.findByRole("button", { name: "select" }));
+
+      expect(opened).toHaveBeenCalledTimes(1);
+      const payload = opened.mock.calls[0][0];
+      expect(payload.attributeInstance).toBe(attributeInstance.table_attributes[0]);
+      expect(payload.metaAttribute.attribute_type.role.uuid).toBe("role-1");
+      expect(useUiStore.getState().dialogs.referenceAttribute).toBe(true);
+      subscription.dispose();
+    });
+
+    it("shows a reference set in place once the revision moves", async () => {
+      const attributeInstance = openWith([cellJson({ value: "" })]);
+      render(<TableAttributeDialog />);
+      await screen.findByRole("button", { name: "select" });
+
+      const cell = attributeInstance.table_attributes[0];
+      cell.value = "Column - 01";
+      cell.role_instance_from = { uuid: "ri-1", name: "Column - 01" } as never;
+      act(() => useSelectionStore.getState().bump());
+
+      expect(await screen.findByText("Column - 01")).toBeTruthy();
+    });
   });
 });

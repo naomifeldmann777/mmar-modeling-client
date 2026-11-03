@@ -266,6 +266,32 @@ describe("AttributeWindow", () => {
     await waitFor(() => expect(mocks.globalObject.doSceneInstancePatch).toBe(true));
   });
 
+  // A single-line input drops line breaks, so a keystroke or Enter in it saved a
+  // mechanism as one line, and its first `//` comment then hid the rest of its code.
+  it("edits a multi-line attribute in a textarea, which keeps line breaks, and commits it on blur", async () => {
+    const code = "async function onUpdate(expression, instance) {\n  // a comment\n  instance.ran = true;\n}";
+    const mechanismAttribute = metaAttribute({
+      ui_component: "multi-line",
+      attribute_type: { uuid: "at-mechanism", regex_value: "^[\\s\\S]*$", role: null, has_table_attribute: [] },
+    });
+    mocks.metaUtility.getMetaAttribute.mockResolvedValue(mechanismAttribute);
+    mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(mechanismAttribute);
+    const classInstance = selectClassInstanceWith([attributeInstanceJson({ value: code, name: "onUpdate" })]);
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    const field = await screen.findByDisplayValue(code, { normalizer: (text) => text });
+    expect(field.tagName).toBe("TEXTAREA");
+
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(classInstance.attribute_instance[0].value).toBe(code);
+
+    const edited = code.replace("instance.ran = true;", "instance.ran = true;\n  instance.again = true;");
+    fireEvent.change(field, { target: { value: edited } });
+    fireEvent.blur(field);
+    expect(classInstance.attribute_instance[0].value).toBe(edited);
+  });
+
   // The reported bug: letters typed into a Float attribute were written onto the
   // AttributeInstance, so the next autosave was answered with 403 — which alerted
   // "not authorized", rolled the scene back and left the canvas throwing vizrep /

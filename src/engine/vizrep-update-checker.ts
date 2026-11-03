@@ -176,6 +176,9 @@ export class VizrepUpdateChecker {
         // run the vizrep function and call the update vizrep function to update the vizrep
         await this.gc.runVizRepFunction(geometryAsString);
         await this.gc.updateVizRep(objectInstance!);
+        // A redraw can change the outline relations end on. Nothing moved, so without
+        // this they would keep ending at the old outline until the next drag.
+        this.globalObjectInstance.objectScaled = true;
       }
     } finally {
       // hand the borrowed instance back to whatever the local user had selected

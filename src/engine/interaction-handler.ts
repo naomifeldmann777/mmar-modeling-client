@@ -591,6 +591,16 @@ import { runExclusive } from "@/resources/services/draw-lock";
       const { classInstance: intersect_class_instance, portInstance: intersect_port_instance } = await this.resolveIntersectedEndpoint();
       const relationclass = await this.findMetaRelationclass(index);
 
+      // A relation straight back to the object it starts on has no line: the animator
+      // routes from one object to the next, and without a bendpoint there is no next
+      // one, so it was saved but never drawn. The line stays in creation instead.
+      const inCreation = sceneInstance.relationclasses_instances.find((element) => element.uuid == this.globalStateObject.activeStateLine!.uuid)!;
+      const linePoints = inCreation.line_points as { UUID: string }[];
+      if (linePoints.length <= 2 && linePoints[0]?.UUID == this.intersect.object.uuid) {
+        this.logger.log("A relation cannot end on the object it starts on. Click empty space first to add a bendpoint.", "error");
+        return;
+      }
+
       //exactly one of the two endpoint kinds is set
       this.allowed = this.consistencyChecker.checkEndPoint(relationclass!, intersect_class_instance, intersect_port_instance);
       if (this.allowed == false) {
@@ -615,6 +625,11 @@ import { runExclusive } from "@/resources/services/draw-lock";
       setTimeout(() => {
         delete this.globalStateObject.activeStateLine;
       }, 100);
+      // Route the line onto the object it now ends on. Lines are routed while one is in
+      // creation, and a slow frame could miss the 100 ms above, leaving the line ending
+      // where the pointer was, under the object.
+      this.globalObjectInstance.objectScaled = true;
+      this.globalObjectInstance.render = true;
 
       //this is the from Object if we create a relationclass_instance. We need that for the role_instance (from)
       const uuid_relationclass: string = relationclass!.uuid;

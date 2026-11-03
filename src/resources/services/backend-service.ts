@@ -5,7 +5,6 @@ import { Procedure } from "@gds/models/meta/Metamodel_procedure.structure";
 import { UUID } from "@gds/models/meta/Metamodel_metaobjects.structure";
 import { SceneInstance } from "@gds/models/instance/Instance_scenes.structure";
 import { ClassInstance } from "@gds/models/instance/Instance_classes.structure";
-import { RelationclassInstance } from "@gds/models/instance/Instance_relationclasses.structure";
 import { apiFetch, ApiError, responseErrorMessage } from "./api";
 import { getToken } from "./token";
 import { useLogStore } from "@/resources/store/logStore";
@@ -214,8 +213,8 @@ export class BackendService {
     return SceneInstance.fromJS(await response.json()) as SceneInstance;
   }
 
-  /** DELETE /instances/sceneInstances/:uuid -> SceneInstance[]. */
-  async sceneInstancesAllDELETE2(sceneInstanceUUID: string): Promise<SceneInstance[]> {
+  /** DELETE /instances/sceneInstances/:uuid -> the uuids of everything deleted with it. */
+  async sceneInstancesAllDELETE2(sceneInstanceUUID: string): Promise<string[]> {
     try {
       const response = await apiFetch(
         `instances/sceneInstances/${encodeURIComponent(sceneInstanceUUID)}`,
@@ -223,9 +222,7 @@ export class BackendService {
       );
       if (!response.ok) throw new Error(`Failed to delete scene instance (${response.status})`);
       const data = await response.json();
-      return Array.isArray(data)
-        ? data.map((item) => SceneInstance.fromJS(item) as SceneInstance)
-        : [];
+      return Array.isArray(data) ? data : [];
     } catch (error) {
       log(`Error deleting scene instance: ${error}`, "error");
       return [];
@@ -234,8 +231,8 @@ export class BackendService {
 
   // --- Class / relationclass / bendpoint instances --------------------------
 
-  /** DELETE /instances/classesInstances/:uuid -> ClassInstance[]. */
-  async classesInstancesAllDELETE2(classInstanceUUID: string): Promise<ClassInstance[]> {
+  /** DELETE /instances/classesInstances/:uuid -> the uuids of everything deleted with it. */
+  async classesInstancesAllDELETE2(classInstanceUUID: string): Promise<string[]> {
     try {
       const response = await apiFetch(
         `instances/classesInstances/${encodeURIComponent(classInstanceUUID)}`,
@@ -243,19 +240,15 @@ export class BackendService {
       );
       if (!response.ok) throw new Error(`Failed to delete class instance (${response.status})`);
       const data = await response.json();
-      return Array.isArray(data)
-        ? data.map((item) => ClassInstance.fromJS(item) as ClassInstance)
-        : [];
+      return Array.isArray(data) ? data : [];
     } catch (error) {
       log(`Error deleting class instance: ${error}`, "error");
       return [];
     }
   }
 
-  /** DELETE /instances/relationClassesInstances/:uuid -> RelationclassInstance[]. */
-  async relationClassesInstancesAllDELETE2(
-    relClassesUUID: string,
-  ): Promise<RelationclassInstance[]> {
+  /** DELETE /instances/relationClassesInstances/:uuid -> the uuids of everything deleted with it. */
+  async relationClassesInstancesAllDELETE2(relClassesUUID: string): Promise<string[]> {
     try {
       const response = await apiFetch(
         `instances/relationClassesInstances/${encodeURIComponent(relClassesUUID)}`,
@@ -263,9 +256,7 @@ export class BackendService {
       );
       if (!response.ok) throw new Error(`Failed to delete relation instance (${response.status})`);
       const data = await response.json();
-      return Array.isArray(data)
-        ? data.map((item) => RelationclassInstance.fromJS(item) as RelationclassInstance)
-        : [];
+      return Array.isArray(data) ? data : [];
     } catch (error) {
       log(`Error deleting relation instance: ${error}`, "error");
       return [];

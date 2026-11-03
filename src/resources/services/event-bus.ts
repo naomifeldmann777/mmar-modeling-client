@@ -1,4 +1,5 @@
 import type { AttributeInstance } from "@gds/models/instance/Instance_attributes.structure";
+import type { Attribute } from "@gds/models/meta/Metamodel_attributes.structure";
 
 /**
  * The app's typed event bus: `.publish(event, payload)` and `.subscribe(event, cb)`,
@@ -39,6 +40,8 @@ export interface SceneAccessGrantedPayload {
  */
 export interface OpenReferenceDialogPayload {
   attributeInstance: AttributeInstance;
+  /** Set for a table cell: a column's attribute is on no class, port or scene type. */
+  metaAttribute?: Attribute;
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   TextField,
 } from "@mui/material";
 import type {
+  Attribute,
   AttributeInstance,
   ClassInstance,
   PortInstance,
@@ -25,6 +26,8 @@ import type {
 } from "@gds";
 import { globalObject, instanceCreationHandler } from "@/engine";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
+import { markActiveSceneDirty } from "@/resources/collaboration/local-change-publisher";
+import { historyService } from "@/resources/services/history-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { expressionUtility } from "@/resources/services/expression-utility";
@@ -32,6 +35,7 @@ import { loadAllSceneInstances } from "@/resources/services/scene-tree-service";
 import { eventBus, type OpenReferenceDialogPayload } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
+import { useSelectionStore } from "@/resources/store/selectionStore";
 import { useUiStore } from "@/resources/store/uiStore";
 import { NAME_ATTRIBUTE_UUID } from "@/constants";
 
@@ -119,7 +123,7 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
       const instance = payload.attributeInstance;
       setAttributeInstance(instance);
 
-      const role = await resolveAttributeRole(instance);
+      const role = await resolveAttributeRole(instance, payload.metaAttribute);
       const roleInstance = instance.role_instance_from ?? null;
       if (roleInstance) {
         roleInstance.name = await resolveReferenceName(roleInstance);
@@ -147,6 +151,18 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
     return () => sub.dispose();
   }, [load]);
 
+  /**
+   * What every edit owes the rest of the app (see `applyFieldChange`). A reference needs
+   * it as much as a typed value: without it a vizRep showing the reference stayed stale,
+   * and the reference reached the server only if some later edit flagged the scene.
+   */
+  function announceChange(changed: AttributeInstance, label: string) {
+    eventBus.publish("checkForVizRepUpdateByAttributeInstance", changed);
+    markActiveSceneDirty();
+    useSelectionStore.getState().bump();
+    historyService.record(label);
+  }
+
   // dialog-reference-attribute.ts:221
   async function deleteReferenceRoleInstance() {
     if (!attributeInstance || !referenceRoleInstance) return;
@@ -165,6 +181,7 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
 
     //push to log file
     logger.log("RoleInstance Instance " + copyToLog.uuid + " deleted", "done");
+    announceChange(attributeInstance, "remove reference");
     onChanged?.();
   }
 
@@ -212,6 +229,7 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
     // A Statechange Reference adopts the mesh of whatever it now points at.
     await hybridAlgorithmsService.checkHybridAlgorithms(attributeInstance);
 
+    announceChange(attributeInstance, "set reference");
     onChanged?.();
   }
 
@@ -401,7 +419,13 @@ async function referencedName(
  * does not carry this attribute either. metaUtility searches the scene type first, so it
  * covers both — without it the pickers stay empty because no Role is found.
  */
-async function resolveAttributeRole(attributeInstance: AttributeInstance): Promise<Role | undefined> {
+async function resolveAttributeRole(
+  attributeInstance: AttributeInstance,
+  metaAttribute?: Attribute,
+): Promise<Role | undefined> {
+  // A table cell: its column's attribute is on no class, port or scene type.
+  if (metaAttribute?.attribute_type?.role) return metaAttribute.attribute_type.role;
+
   const attributeUUID = attributeInstance.uuid_attribute;
   const currentClass = globalObject.current_class_instance
     ? await metaUtility.getMetaClass(globalObject.current_class_instance.uuid_class)

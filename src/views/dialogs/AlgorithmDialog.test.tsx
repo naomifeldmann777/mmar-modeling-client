@@ -29,9 +29,13 @@ const mocks = vi.hoisted(() => ({
     execute: vi.fn(async (_independent: string, _dependent: string) => undefined),
   },
   logger: { log: vi.fn() },
+  markActiveSceneDirty: vi.fn(),
 }));
 vi.mock("@/resources/services/procedure-utility", () => ({ procedureUtility: mocks.procedureUtility }));
 vi.mock("@/resources/services/logger", () => ({ logger: mocks.logger }));
+vi.mock("@/resources/collaboration/local-change-publisher", () => ({
+  markActiveSceneDirty: mocks.markActiveSceneDirty,
+}));
 
 const { default: AlgorithmDialog } = await import("@/views/dialogs/AlgorithmDialog");
 const { useUiStore } = await import("@/resources/store/uiStore");
@@ -123,6 +127,35 @@ describe("AlgorithmDialog", () => {
 
     // "" is procedureUtility.execute's "skip this group" sentinel.
     await waitFor(() => expect(mocks.procedureUtility.execute).toHaveBeenCalledWith("Layout", ""));
+  });
+
+  it("flags the open scene for saving after a run, because a procedure flags nothing", async () => {
+    openTab();
+    mocks.procedureUtility.getAssignedProcedures.mockResolvedValue([{ name: "Robot check" }]);
+    render(<AlgorithmDialog />);
+    act(() => useUiStore.getState().openDialog("algorithm"));
+    await waitFor(() => expect(mocks.procedureUtility.getAssignedProcedures).toHaveBeenCalled());
+
+    await openSelect(1);
+    fireEvent.click(screen.getByText("Robot check"));
+    fireEvent.click(screen.getAllByRole("button", { name: "run" })[1]);
+
+    await waitFor(() => expect(mocks.markActiveSceneDirty).toHaveBeenCalledTimes(1));
+  });
+
+  it("flags nothing when an independent procedure runs with no tab open", async () => {
+    mocks.procedureUtility.getGeneralProcedures.mockResolvedValue([{ name: "Layout" }]);
+    render(<AlgorithmDialog />);
+    act(() => useUiStore.getState().openDialog("algorithm"));
+    await waitFor(() => expect(mocks.procedureUtility.getGeneralProcedures).toHaveBeenCalled());
+
+    await openSelect(0);
+    fireEvent.click(screen.getByText("Layout"));
+    fireEvent.click(screen.getAllByRole("button", { name: "run" })[0]);
+
+    await waitFor(() => expect(mocks.procedureUtility.execute).toHaveBeenCalledWith("Layout", ""));
+    await act(async () => undefined);
+    expect(mocks.markActiveSceneDirty).not.toHaveBeenCalled();
   });
 
   it("runs the selected assigned procedure through the dependent slot", async () => {

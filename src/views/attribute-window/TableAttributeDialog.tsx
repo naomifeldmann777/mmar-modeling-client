@@ -69,6 +69,11 @@ import { ROBOTIC_SYSTEM_SCENETYPE_UUID } from "@/constants";
  * so only the outermost is store-driven; nested levels are local state on the recursive
  * view component below. The demo metamodel really does nest — Robotic system → Joint has
  * button columns.
+ *
+ * A column whose attribute type carries a Role is a reference column, whatever its
+ * `ui_component`, by the same rule the attribute window applies to attributes. Its cells
+ * point at other instances through the attribute window's one reference dialog. That is
+ * how an attribute holds several references: a reference attribute has room for one.
  */
 interface TablePayload {
   attributeInstance: AttributeInstance;
@@ -123,6 +128,10 @@ function TableAttributeDialogView({
   const [currentClass, setCurrentClass] = useState<Class | null>(null);
   const [nestedCell, setNestedCell] = useState<{ row: number; col: number } | null>(null);
   const bump = useSelectionStore((s) => s.bump);
+  const openDialog = useUiStore((s) => s.openDialog);
+  // The reference dialog edits a cell in place and bumps the revision, so subscribing is
+  // what makes a reference cell show the value it now holds.
+  useSelectionStore((s) => s.revision);
 
   // Meta information and table rows are loaded together (one pass, one render; the
   // called reset() + load(), and load() called both in sequence).
@@ -247,6 +256,13 @@ function TableAttributeDialogView({
     historyService.record(label);
   }
 
+  /** Same two steps as the attribute window: the dialog's context, then its flag. */
+  function openReferenceCell(cell: AttributeInstance, column: ColumnStructure) {
+    const payload = { attributeInstance: cell, metaAttribute: column.attribute };
+    eventBus.publish("openReferenceDialog", payload);
+    openDialog("referenceAttribute", payload);
+  }
+
   // dialog-table-attribute.ts:166 — createRow
   async function createRow() {
     if (!currentAttribute) return;
@@ -301,6 +317,7 @@ function TableAttributeDialogView({
               <TableRow key={row[0]?.uuid ?? i}>
                 {row.map((cell, j) => {
                   const uiComponent = (columns[j]?.ui_component ?? "").toLowerCase();
+                  const isReference = columns[j]?.attribute?.attribute_type?.role != null;
                   return (
                     <TableCell
                       key={cell?.uuid ?? `${i}-${j}`}
@@ -310,9 +327,11 @@ function TableAttributeDialogView({
                         <TableAttributeCell
                           cell={cell}
                           uiComponent={uiComponent}
+                          isReference={isReference}
                           facets={facetsAll[j] ?? []}
                           onCommit={(next) => commitCell(cell, next, columns[j]?.attribute)}
                           onOpenNested={() => setNestedCell({ row: i, col: j })}
+                          onOpenReference={() => openReferenceCell(cell, columns[j])}
                         />
                       ) : (
                         <IconButton
@@ -381,20 +400,24 @@ function TableAttributeDialogView({
   );
 }
 
-/** One cell: a text field, a slider, a dropdown or a nested-table button. */
+/** One cell: a text field, a slider, a dropdown, a nested-table button or a reference. */
 function TableAttributeCell({
   cell,
   uiComponent,
+  isReference,
   facets,
   onCommit,
   onOpenNested,
+  onOpenReference,
 }: {
   cell: AttributeInstance;
   uiComponent: string;
+  isReference: boolean;
   facets: string[];
   /** Returns false when the metamodel refused the value; the field then snaps back. */
   onCommit: (next: string) => boolean;
   onOpenNested: () => void;
+  onOpenReference: () => void;
 }) {
   const [value, setValue] = useState<string>(cell.value ?? "");
 
@@ -417,10 +440,38 @@ function TableAttributeCell({
     if (!onCommit(next)) setValue(cell.value ?? "");
   }
 
+  // Shown as the attribute window shows a reference attribute: the reference's name.
+  if (isReference) {
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Typography variant="body2" sx={{ flex: 1, textAlign: "left" }}>
+          {cell.role_instance_from?.name ?? ""}
+        </Typography>
+        <Button variant="outlined" size="small" onClick={onOpenReference}>
+          select
+        </Button>
+      </Box>
+    );
+  }
+
   if (uiComponent === "text") {
     return (
       <TextField
         size="small"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => commit(value)}
+        slotProps={{ htmlInput: { "aria-label": cell.name } }}
+      />
+    );
+  }
+
+  if (uiComponent === "multi-line") {
+    return (
+      <TextField
+        size="small"
+        multiline
+        maxRows={8}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onBlur={() => commit(value)}

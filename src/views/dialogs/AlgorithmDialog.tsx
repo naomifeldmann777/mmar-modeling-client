@@ -15,6 +15,7 @@ import {
 } from "@mui/material";
 import { Procedure } from "@gds";
 import { globalObject } from "@/engine/global-definition";
+import { markActiveSceneDirty } from "@/resources/collaboration/local-change-publisher";
 import { historyService } from "@/resources/services/history-service";
 import { procedureUtility } from "@/resources/services/procedure-utility";
 import { logger } from "@/resources/services/logger";
@@ -68,16 +69,24 @@ export default function AlgorithmDialog() {
     );
   }, [open, getProcedures]);
 
-  async function executeIndependent() {
-    await procedureUtility.execute(independentAlgorithmChoice, "");
+  function afterRun(name: string) {
     // A procedure is an arbitrary stored code string that may rewrite any part of the
     // scene, so the step carries no touched list and the whole scene gets diffed.
-    historyService.record(`algorithm ${independentAlgorithmChoice}`);
+    historyService.record(`algorithm ${name}`);
+    // It writes straight onto the gds objects, which flags nothing, so its results would
+    // reach the server only if a later edit saved the scene. An independent procedure can
+    // run with no tab open, and then there is no scene to save.
+    if (globalObject.tabContext[globalObject.selectedTab] != undefined) markActiveSceneDirty();
+  }
+
+  async function executeIndependent() {
+    await procedureUtility.execute(independentAlgorithmChoice, "");
+    afterRun(independentAlgorithmChoice);
   }
 
   async function executeDependent() {
     await procedureUtility.execute("", dependentAlgorithmChoice);
-    historyService.record(`algorithm ${dependentAlgorithmChoice}`);
+    afterRun(dependentAlgorithmChoice);
   }
 
   const run = (fn: () => Promise<void>) => () =>

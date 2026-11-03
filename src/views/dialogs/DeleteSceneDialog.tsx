@@ -12,6 +12,7 @@ import { backendService } from "@/resources/services/backend-service";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import { removeSceneInstanceFromTree } from "@/resources/services/scene-tree-service";
+import { removeReferencesTo } from "@/resources/services/reference-cleanup";
 import { eventBus } from "@/resources/services/event-bus";
 import { useUiStore } from "@/resources/store/uiStore";
 import { useTabsStore } from "@/resources/store/tabsStore";
@@ -74,8 +75,9 @@ export default function DeleteSceneDialog() {
     // scene tree would still show the scene and leave the user guessing.
     setDeleting(true);
     setErrorMsg("");
+    let deletedUuids: string[];
     try {
-      await backendService.sceneInstancesAllDELETE2(uuid);
+      deletedUuids = await backendService.sceneInstancesAllDELETE2(uuid);
     } catch (error) {
       setDeleting(false);
       setErrorMsg(
@@ -94,6 +96,7 @@ export default function DeleteSceneDialog() {
     if (openTabIndex !== -1) {
       await closeTab(openTabIndex);
     }
+    await removeReferencesTo(deletedUuids);
 
     // Order matters: the tab is closed above FIRST, because 'updateSceneGroup' folds
     // every open tab back into the tree and would re-add the scene we just removed.

@@ -8,6 +8,7 @@ import { instanceUtility } from "@/resources/services/instance-utility";
 import { logger } from "@/resources/services/logger";
 import { backendService } from "@/resources/services/backend-service";
 import { eventBus } from "@/resources/services/event-bus";
+import { removeReferencesTo } from "@/resources/services/reference-cleanup";
 import { publishLocalChange } from "@/resources/collaboration/local-change-publisher";
 
 /**
@@ -153,7 +154,7 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
           await this.fetchHelper.bendpointInstanceDELETE(classInstance.uuid);
           this.logger.log(`Bendpoint with uuid ${classInstance.uuid} deleted from DB`, "info");
         } else {
-          await this.fetchHelper.classesInstancesAllDELETE2(classInstance.uuid);
+          await removeReferencesTo(await this.fetchHelper.classesInstancesAllDELETE2(classInstance.uuid));
           this.logger.log(`ClassInstance with uuid ${classInstance.uuid} deleted from DB`, "info");
         }
       } catch (error) {
@@ -250,7 +251,7 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     // delete relationclassInstance from DB if autoSave is enabled
     if (this.globalObjectInstance.autoSave) {
       try {
-        await this.fetchHelper.relationClassesInstancesAllDELETE2(relationclassInstance.uuid);
+        await removeReferencesTo(await this.fetchHelper.relationClassesInstancesAllDELETE2(relationclassInstance.uuid));
         this.logger.log(`RelationclassInstance with uuid ${relationclassInstance.uuid} deleted from DB`, "info");
       } catch (error) {
         this.logger.log(`Error deleting RelationclassInstance with uuid ${relationclassInstance.uuid}: ${error}`, "error");

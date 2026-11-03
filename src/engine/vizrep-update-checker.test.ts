@@ -16,6 +16,7 @@ import { AttributeInstance, ClassInstance } from "@gds";
 const fakeGlobal = vi.hoisted(() => ({
   globalObject: {
     readyForVizRepUpdate: true,
+    objectScaled: false,
     current_class_instance: null as unknown,
     selectedTab: 0,
     tabContext: [] as { sceneInstance: unknown }[],
@@ -148,6 +149,14 @@ describe("checkForVizRepUpdate", () => {
     // A variable the user moved by hand (user_locked) must survive the redraw.
     expect(instance.custom_variables).not.toHaveProperty("free");
     expect(instance.custom_variables).toHaveProperty("pinned");
+  });
+
+  it("asks for relations to be re-routed, because a redraw can change an outline", async () => {
+    fakeGlobal.globalObject.objectScaled = false;
+
+    await vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance());
+
+    expect(fakeGlobal.globalObject.objectScaled).toBe(true);
   });
 
   it("releases the readyForVizRepUpdate lock when finished", async () => {

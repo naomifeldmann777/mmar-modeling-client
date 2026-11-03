@@ -4,6 +4,8 @@ import { metaUtility } from "./meta-utility";
 import { expressionUtility } from "./expression-utility";
 import { instanceUtility } from "./instance-utility";
 import { MECHANISM_ATTRIBUTE_TYPE_UUID } from "@/constants";
+import { logger } from "./logger";
+import { describeError } from "@/resources/util/describe-error";
 
 /**
  * Runs the "mechanism" code strings of the open scene.
@@ -14,12 +16,24 @@ import { MECHANISM_ATTRIBUTE_TYPE_UUID } from "@/constants";
  * test that avoids a meta-attribute lookup per attribute instance — and only those whose
  * meta attribute really is of the mechanism type are executed, against the instance that
  * owns them.
+ *
+ * Each mechanism runs on its own: one that fails is reported and the rest still run. A
+ * mechanism is stored code, and the render loop awaits this pass before it routes the
+ * relation lines, so one throwing used to skip the line pass on every heartbeat — and a
+ * relation drawn after that was never routed, so it never appeared.
  */
 export class MechanismUtility {
   private globalObjectInstance = globalObject;
   private metaUtility = metaUtility;
   private expression = expressionUtility;
   private instanceUtility = instanceUtility;
+
+  /**
+   * The code of each mechanism that failed, by attribute instance uuid. A broken
+   * mechanism fails on every heartbeat; it is reported once, and again only when its
+   * code changes and still fails.
+   */
+  private failedCode = new Map<string, string>();
 
   async executeAllMechanisms() {
     const tabContext = this.globalObjectInstance.tabContext;
@@ -56,12 +70,24 @@ export class MechanismUtility {
               );
             }
             if (contextInstance) {
-              await this.runMechanismFunction(generalMechanismCode, contextInstance);
+              try {
+                await this.runMechanismFunction(generalMechanismCode, contextInstance);
+                this.failedCode.delete(attributeInstance.uuid);
+              } catch (error) {
+                this.reportFailure(attributeInstance, contextInstance, generalMechanismCode, error);
+              }
             }
           }
         }
       }
     }
+  }
+
+  private reportFailure(attributeInstance: AttributeInstance, contextInstance: ObjectInstance, code: string, error: unknown) {
+    if (this.failedCode.get(attributeInstance.uuid) === code) return;
+    this.failedCode.set(attributeInstance.uuid, code);
+    const owner = contextInstance.name ? ` of ${contextInstance.name}` : "";
+    logger.log(`Mechanism ${attributeInstance.name ?? attributeInstance.uuid_attribute}${owner} (${contextInstance.uuid}) failed: ${describeError(error)}`, "error");
   }
 
   /**

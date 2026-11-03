@@ -37,10 +37,17 @@ const mocks = vi.hoisted(() => ({
   // scope — this whole file fails to load without the mock below. (Same lesson as P9's
   // persistency-handler, P10's shared-doc-service and P11's renderers.)
   hybridAlgorithmsService: { checkHybridAlgorithms: vi.fn(async () => undefined) },
+  // Both import the @/engine/global-definition leaf too.
+  historyService: { record: vi.fn() },
+  markActiveSceneDirty: vi.fn(),
 }));
 
 vi.mock("@/engine/hybrid-algorithms/hybrid-algorithms-service", () => ({
   hybridAlgorithmsService: mocks.hybridAlgorithmsService,
+}));
+vi.mock("@/resources/services/history-service", () => ({ historyService: mocks.historyService }));
+vi.mock("@/resources/collaboration/local-change-publisher", () => ({
+  markActiveSceneDirty: mocks.markActiveSceneDirty,
 }));
 vi.mock("@/engine", () => ({
   globalObject: mocks.globalObject,
@@ -52,6 +59,7 @@ vi.mock("@/resources/services/expression-utility", () => ({ expressionUtility: m
 
 import ReferenceAttributeDialog from "./ReferenceAttributeDialog";
 import { eventBus } from "@/resources/services/event-bus";
+import { useSelectionStore } from "@/resources/store/selectionStore";
 import { useUiStore } from "@/resources/store/uiStore";
 import { useLogStore } from "@/resources/store/logStore";
 
@@ -286,5 +294,76 @@ describe("ReferenceAttributeDialog", () => {
     await waitFor(() => expect(attributeInstance.role_instance_from).toBeNull());
     expect(attributeInstance.value).toBe("...");
     expect(mocks.globalObject.role_instances.map((r: RoleInstance) => r.uuid)).toEqual(["ri-keep"]);
+  });
+
+  describe("announcing a change like any other edit", () => {
+    /** Renders the dialog on a fresh attribute and waits for the picker. */
+    async function pickTarget() {
+      const target = allowedClassInstance();
+      mocks.instanceUtility.getAllClassInstances.mockResolvedValue([target]);
+      mocks.instanceUtility.getClassInstance.mockResolvedValue(target);
+      mocks.instanceCreationHandler.createRoleInstance.mockImplementation(
+        async (uuid: string) => RoleInstance.fromJS({ uuid, uuid_role: ROLE_UUID, name: "name_placeholder" }) as RoleInstance,
+      );
+      const attributeInstance = referenceAttributeInstance();
+      render(<ReferenceAttributeDialog />);
+      openDialogWith(attributeInstance);
+      await waitFor(() => expect(screen.getByText("Select Referenced ClassInstance")).toBeTruthy());
+      fireEvent.mouseDown(screen.getByRole("combobox"));
+      fireEvent.click(await screen.findByRole("option", { name: /Referenced Task/ }));
+      return attributeInstance;
+    }
+
+    it("redraws, saves and records an undo step when a reference is set", async () => {
+      const redraw = vi.fn();
+      const subscription = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", redraw);
+      const attributeInstance = await pickTarget();
+      const revision = useSelectionStore.getState().revision;
+
+      fireEvent.click(screen.getByRole("button", { name: "add" }));
+
+      await waitFor(() => expect(mocks.markActiveSceneDirty).toHaveBeenCalledTimes(1));
+      expect(redraw).toHaveBeenCalledWith(attributeInstance);
+      expect(mocks.historyService.record).toHaveBeenCalledWith("set reference");
+      expect(useSelectionStore.getState().revision).toBeGreaterThan(revision);
+      subscription.dispose();
+    });
+
+    it("redraws, saves and records an undo step when a reference is removed", async () => {
+      const redraw = vi.fn();
+      const subscription = eventBus.subscribe("checkForVizRepUpdateByAttributeInstance", redraw);
+      const attributeInstance = referenceAttributeInstance({
+        value: "Referenced Task",
+        role_instance_from: { uuid: "ri-1", uuid_role: ROLE_UUID, name: "old", uuid_has_reference_class_instance: "ci-target" },
+      });
+      mocks.instanceUtility.getClassInstance.mockResolvedValue(allowedClassInstance());
+      render(<ReferenceAttributeDialog />);
+      openDialogWith(attributeInstance);
+      await waitFor(() => expect(screen.getByRole("button", { name: "delete" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "delete" }));
+
+      await waitFor(() => expect(mocks.markActiveSceneDirty).toHaveBeenCalledTimes(1));
+      expect(redraw).toHaveBeenCalledWith(attributeInstance);
+      expect(mocks.historyService.record).toHaveBeenCalledWith("remove reference");
+      subscription.dispose();
+    });
+  });
+
+  it("reads a table cell's Role off the column attribute it was opened with", async () => {
+    // The column's attribute is on no class or scene type, so the usual lookups find nothing.
+    mocks.metaUtility.getMetaClass.mockResolvedValue({ attributes: [] });
+    mocks.metaUtility.getMetaAttribute.mockResolvedValue(undefined);
+    mocks.instanceUtility.getAllClassInstances.mockResolvedValue([allowedClassInstance()]);
+    const cell = referenceAttributeInstance();
+
+    render(<ReferenceAttributeDialog />);
+    eventBus.publish("openReferenceDialog", {
+      attributeInstance: cell,
+      metaAttribute: metaClassWithReferenceAttribute().attributes[0] as never,
+    });
+    useUiStore.setState({ dialogs: { ...useUiStore.getState().dialogs, referenceAttribute: true } });
+
+    await waitFor(() => expect(screen.getByText("Select Referenced ClassInstance")).toBeTruthy());
   });
 });

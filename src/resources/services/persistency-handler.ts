@@ -11,6 +11,7 @@ import { instanceUtility } from "./instance-utility";
 import { snapshotService } from "./snapshot-service";
 import { backendService } from "./backend-service";
 import { eventBus } from "./event-bus";
+import { referencedTargets, removeReferencesDroppedBySave } from "./reference-cleanup";
 import { runExclusive } from "./draw-lock";
 import { logger } from "./logger";
 import { NOT_ALLOWED_MESSAGE } from "./metamodel-constraints";
@@ -369,7 +370,9 @@ export class PersistencyHandler {
     // save after that: the server PATCH is an upsert, so there is no POST-on-404
     // fallback anymore (which is what produced the misleading 404 on scene creation).
     try {
-      await backendService.sceneInstancesPATCH(sceneInstance.uuid, sceneInstance);
+      const sentReferences = referencedTargets(sceneInstance);
+      const saved = await backendService.sceneInstancesPATCH(sceneInstance.uuid, sceneInstance);
+      await removeReferencesDroppedBySave(sentReferences, saved);
       this.snapshotService.setSceneInstanceSnapshot(sceneInstance);
       this.logger.log("SceneInstance saved", "info");
     } catch (error) {

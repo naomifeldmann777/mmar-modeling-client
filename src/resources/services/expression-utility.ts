@@ -291,6 +291,36 @@ export class ExpressionUtility {
     return this.instanceUtility.getAttributeInstanceFromAnyInstance(metaAttributeUUID, instance.uuid, "uuid");
   }
 
+  /**
+   * A line in the log window, for a procedure to report its result: stored code has no
+   * other way to reach it. `status` is a log status, and "error" also raises the snackbar.
+   */
+  log(message: string, status: string = "info"): void {
+    logger.log(message, status);
+  }
+
+  /**
+   * Fetches every scene into the local tree, which the tree otherwise fills per expanded
+   * SceneType. The other walkers here only see what is local, so a procedure following a
+   * reference into another scene needs this first.
+   *
+   * Imported on demand because scene-tree-service imports the `@/engine` barrel, and the
+   * barrel imports this module through graphic-context.
+   */
+  async loadAllSceneInstances(): Promise<void> {
+    const { loadAllSceneInstances } = await import("./scene-tree-service");
+    await loadAllSceneInstances();
+  }
+
+  /**
+   * The instance with this uuid, in any local scene. `getSourceByRelInstanceUUID` and
+   * friends can only reach an instance through a relation, so without this a procedure
+   * could not tell the class of a referenced instance that has none.
+   */
+  async getInstanceByUUID(instanceUUID: string) {
+    return this.instanceUtility.getAnyInstance(instanceUUID);
+  }
+
   /** A cached file as a data-URL, for image and icon vizReps. */
   async getImageByUUID(fileUUID: UUID): Promise<string> {
     return this.fileUtility.FiletoDataUrl(this.metaUtility.getFileByUUID(fileUUID));

@@ -13,8 +13,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
 const mocks = vi.hoisted(() => ({
-  backendService: { sceneInstancesAllDELETE2: vi.fn(async (): Promise<unknown> => ({})) },
+  backendService: { sceneInstancesAllDELETE2: vi.fn(async (): Promise<unknown> => ["deleted-uuid"]) },
   closeTab: vi.fn(async (): Promise<void> => {}),
+  removeReferencesTo: vi.fn(async (): Promise<void> => {}),
   globalObject: { sceneTree: [], importSceneInstances: [] } as {
     sceneTree: { uuid: string; children?: { uuid: string; name?: string }[] }[];
     importSceneInstances: { uuid: string }[];
@@ -26,6 +27,7 @@ vi.mock("@/resources/services/backend-service", () => ({ backendService: mocks.b
 // tabActions.closeTab drives the real engine/collaboration singletons, which aren't
 // mounted here — mock it and assert the dialog calls it with the open tab's index.
 vi.mock("@/views/layout/tabActions", () => ({ closeTab: mocks.closeTab }));
+vi.mock("@/resources/services/reference-cleanup", () => ({ removeReferencesTo: mocks.removeReferencesTo }));
 
 import DeleteSceneDialog from "./DeleteSceneDialog";
 import { eventBus } from "@/resources/services/event-bus";
@@ -118,6 +120,14 @@ describe("DeleteSceneDialog", () => {
     await waitFor(() => expect(updateSceneGroup).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(useUiStore.getState().dialogs.deleteScene).toBe(false));
     sub.dispose();
+  });
+
+  it("removes the references the other open scenes held to what was deleted", async () => {
+    openConfirm();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delete SceneInstance" }));
+
+    await waitFor(() => expect(mocks.removeReferencesTo).toHaveBeenCalledWith(["deleted-uuid"]));
   });
 
   it("removes just the deleted node instead of rebuilding the tree", async () => {
