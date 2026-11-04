@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Box, Button, Divider, Tab, Tabs, TextField, Typography } from "@mui/material";
-import type { AttributeInstance } from "@gds";
+import { is_read_only_ui_component, type AttributeInstance } from "@gds";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { eventBus, type UploadEventPayload } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
@@ -15,6 +15,7 @@ import {
 } from "./attributeModel";
 import PlainAttributeRow from "./PlainAttributeRow";
 import PositionPanel from "./PositionPanel";
+import { READ_ONLY_FIELD_SX } from "./readOnlyField";
 import ReferenceAttributeDialog from "./ReferenceAttributeDialog";
 import TableAttributeDialog from "./TableAttributeDialog";
 import UploadFileDialog from "@/views/dialogs/UploadFileDialog";
@@ -157,11 +158,14 @@ export default function AttributeWindow() {
   // No scene-instance field in the payload: the dialog only uses the owner to dispatch
   // the hybrid algorithms (class / port only), and it resolves the column structure of a
   // scene-owned table attribute through metaUtility instead — see its `load()`.
+  // A table attribute with a read-only UI component opens the same dialog, but only to
+  // look at: no cell, row or nested table in it can be changed.
   function openTableDialog(enhanced: EnhancedAttributeInstance) {
     openDialog("tableAttribute", {
       attributeInstance: enhanced.attributeInstance,
       currentClassInstance,
       currentPortInstance,
+      readOnly: is_read_only_ui_component(enhanced.uiType),
     });
   }
 
@@ -252,26 +256,32 @@ export default function AttributeWindow() {
               <Typography variant="h6" sx={{ mb: 1.5, fontSize: "1rem", fontWeight: 600 }}>
                 Reference Attributes
               </Typography>
-              {groups.reference.map((enhanced) => (
-                <Box key={enhanced.attributeInstance.uuid} sx={{ mb: 1 }}>
-                  <TextField
-                    slotProps={{ input: { readOnly: true } }}
-                    size="small"
-                    fullWidth
-                    label={enhanced.attributeInstance.name}
-                    value={enhanced.attributeInstance.role_instance_from?.name ?? ""}
-                  />
-                  {/* This button opens a dialog. All reference buttons share one dialog
-                      view, so the context is passed when opening (see openReferenceDialog). */}
-                  <Button
-                    variant="outlined"
-                    onClick={() => openReferenceDialog(enhanced)}
-                    sx={{ width: "100%", wordBreak: "break-word", fontSize: ".7em" }}
-                  >
-                    {enhanced.attributeInstance.name}
-                  </Button>
-                </Box>
-              ))}
+              {groups.reference.map((enhanced) => {
+                // A read-only reference is shown greyed, and cannot be pointed elsewhere.
+                const readOnly = is_read_only_ui_component(enhanced.uiType);
+                return (
+                  <Box key={enhanced.attributeInstance.uuid} sx={{ mb: 1 }}>
+                    <TextField
+                      slotProps={{ input: { readOnly: true } }}
+                      size="small"
+                      fullWidth
+                      label={enhanced.attributeInstance.name}
+                      value={enhanced.attributeInstance.role_instance_from?.name ?? ""}
+                      sx={readOnly ? READ_ONLY_FIELD_SX : undefined}
+                    />
+                    {/* This button opens a dialog. All reference buttons share one dialog
+                        view, so the context is passed when opening (see openReferenceDialog). */}
+                    <Button
+                      variant="outlined"
+                      disabled={readOnly}
+                      onClick={() => openReferenceDialog(enhanced)}
+                      sx={{ width: "100%", wordBreak: "break-word", fontSize: ".7em" }}
+                    >
+                      {enhanced.attributeInstance.name}
+                    </Button>
+                  </Box>
+                );
+              })}
               <Divider sx={{ borderColor: "silver" }} />
             </Box>
           )}

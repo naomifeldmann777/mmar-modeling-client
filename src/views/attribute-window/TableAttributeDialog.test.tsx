@@ -175,7 +175,7 @@ function referenceColumnMetaAttribute() {
 }
 
 /** Open the dialog on a table attribute holding `cells`. */
-function openWith(cells: Record<string, unknown>[]): AttributeInstance {
+function openWith(cells: Record<string, unknown>[], { readOnly = false } = {}): AttributeInstance {
   const attributeInstance = AttributeInstance.fromJS({
     uuid: "ai-table",
     uuid_attribute: TABLE_ATTRIBUTE_UUID,
@@ -185,7 +185,7 @@ function openWith(cells: Record<string, unknown>[]): AttributeInstance {
   }) as AttributeInstance;
   useUiStore.setState({
     dialogs: { ...useUiStore.getState().dialogs, tableAttribute: true },
-    dialogPayloads: { tableAttribute: { attributeInstance, currentClassInstance: null, currentPortInstance: null } },
+    dialogPayloads: { tableAttribute: { attributeInstance, currentClassInstance: null, currentPortInstance: null, readOnly } },
   });
   return attributeInstance;
 }
@@ -486,6 +486,91 @@ describe("TableAttributeDialog", () => {
       act(() => useSelectionStore.getState().bump());
 
       expect(await screen.findByText("Column - 01")).toBeTruthy();
+    });
+  });
+
+  // --- the "none" and read-only UI components ---------------------------------------
+
+  describe("UI components", () => {
+    function withColumnUi(first: string, second: string) {
+      const metaAttribute = tableMetaAttribute();
+      metaAttribute.attribute_type.has_table_attribute[0].ui_component = first;
+      metaAttribute.attribute_type.has_table_attribute[1].ui_component = second;
+      mocks.metaUtility.getMetaClass.mockResolvedValue({ uuid: "class-1", attributes: [metaAttribute] });
+    }
+
+    const oneRow = () => [
+      cellJson({ uuid: "cell-1", value: "row1-A" }),
+      cellJson({ uuid: "cell-2", uuid_attribute: "col-attr-2", value: "row1-B" }),
+    ];
+
+    it("leaves out a column whose UI component is none, with its cells", async () => {
+      withColumnUi("text", "None");
+      openWith(oneRow());
+
+      render(<TableAttributeDialog />);
+
+      await screen.findByText("Column A");
+      expect(screen.queryByText("Column B")).toBeNull();
+      expect(screen.getByDisplayValue("row1-A")).toBeTruthy();
+      expect(screen.queryByDisplayValue("row1-B")).toBeNull();
+    });
+
+    it("still gives a new row a cell for a hidden column", async () => {
+      withColumnUi("text", "none");
+      const attributeInstance = openWith(oneRow());
+
+      render(<TableAttributeDialog />);
+      await screen.findByText("Column A");
+      fireEvent.click(screen.getByRole("button", { name: "Create Row" }));
+
+      await waitFor(() => expect(attributeInstance.table_attributes).toHaveLength(4));
+      expect(attributeInstance.table_attributes.map((cell) => cell.uuid_attribute)).toContain("col-attr-2");
+    });
+
+    it("shows a read-only column's cells read-only, and never commits them", async () => {
+      withColumnUi("text-readonly", "multi-line-readonly");
+      const attributeInstance = openWith(oneRow());
+
+      render(<TableAttributeDialog />);
+      const input = (await screen.findByDisplayValue("row1-A")) as HTMLInputElement;
+      const textarea = screen.getByDisplayValue("row1-B") as HTMLTextAreaElement;
+
+      expect(input.readOnly).toBe(true);
+      expect(textarea.tagName).toBe("TEXTAREA");
+      expect(textarea.readOnly).toBe(true);
+
+      fireEvent.change(input, { target: { value: "edited" } });
+      fireEvent.blur(input);
+
+      expect(attributeInstance.table_attributes[0].value).toBe("row1-A");
+      expect(mocks.globalObject.doSceneInstancePatch).toBe(false);
+    });
+
+    it("opens a read-only table with every cell and row control locked", async () => {
+      withColumnUi("text", "text");
+      openWith(oneRow(), { readOnly: true });
+
+      render(<TableAttributeDialog />);
+      const input = (await screen.findByDisplayValue("row1-A")) as HTMLInputElement;
+
+      expect(screen.getByText(/\(read only\)/)).toBeTruthy();
+      expect(input.readOnly).toBe(true);
+      expect((screen.getByRole("button", { name: "Create Row" }) as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByRole("button", { name: "remove row 1" }) as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByRole("button", { name: "move row 1 down" }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("disables the select button of a read-only reference column", async () => {
+      const metaAttribute = referenceColumnMetaAttribute();
+      metaAttribute.attribute_type.has_table_attribute[0].ui_component = "text-readonly";
+      mocks.metaUtility.getMetaClass.mockResolvedValue({ uuid: "class-1", attributes: [metaAttribute] });
+      openWith([cellJson()]);
+
+      render(<TableAttributeDialog />);
+
+      const button = (await screen.findByRole("button", { name: "select" })) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
     });
   });
 });

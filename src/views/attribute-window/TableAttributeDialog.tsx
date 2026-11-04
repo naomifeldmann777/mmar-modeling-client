@@ -27,10 +27,14 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import {
   add_table_cell,
   add_table_row,
+  is_hidden_ui_component,
+  is_multi_line_ui_component,
+  is_read_only_ui_component,
   move_table_row,
   remove_table_row,
   table_columns_in_order,
   table_rows,
+  UI_COMPONENT,
   type Attribute,
   type AttributeInstance,
   type Class,
@@ -56,6 +60,7 @@ import {
 import { useUiStore } from "@/resources/store/uiStore";
 import { useSelectionStore } from "@/resources/store/selectionStore";
 import { ROBOTIC_SYSTEM_SCENETYPE_UUID } from "@/constants";
+import { READ_ONLY_FIELD_SX } from "./readOnlyField";
 
 /**
  * Renders an attribute whose type declares `has_table_attribute` columns as an editable
@@ -74,11 +79,18 @@ import { ROBOTIC_SYSTEM_SCENETYPE_UUID } from "@/constants";
  * `ui_component`, by the same rule the attribute window applies to attributes. Its cells
  * point at other instances through the attribute window's one reference dialog. That is
  * how an attribute holds several references: a reference attribute has room for one.
+ *
+ * UI COMPONENTS (see Metamodel_ui_components in gds): a column whose UI component is
+ * "none" is not shown, though its cells still exist and new rows still get one. A
+ * read-only column shows its cells greyed and unchangeable. A table ATTRIBUTE with a
+ * read-only UI component opens the whole dialog read-only: every cell, the row
+ * controls, "Create Row" and any nested table.
  */
 interface TablePayload {
   attributeInstance: AttributeInstance;
   currentClassInstance?: ClassInstance | null;
   currentPortInstance?: PortInstance | null;
+  readOnly?: boolean;
 }
 
 /** uiStore host for the outermost dialog. */
@@ -95,6 +107,7 @@ export default function TableAttributeDialog() {
       attributeInstance={payload.attributeInstance}
       currentClassInstance={payload.currentClassInstance ?? null}
       currentPortInstance={payload.currentPortInstance ?? null}
+      readOnly={payload.readOnly ?? false}
       onClose={() => closeDialog("tableAttribute")}
     />
   );
@@ -107,6 +120,8 @@ interface TableAttributeDialogViewProps {
   attribute?: Attribute;
   currentClassInstance: ClassInstance | null;
   currentPortInstance: PortInstance | null;
+  /** The table attribute is read-only: show the table, change nothing in it. */
+  readOnly?: boolean;
   onClose: () => void;
 }
 
@@ -116,6 +131,7 @@ function TableAttributeDialogView({
   attribute,
   currentClassInstance,
   currentPortInstance,
+  readOnly = false,
   onClose,
 }: TableAttributeDialogViewProps) {
   const [columns, setColumns] = useState<ColumnStructure[]>([]);
@@ -152,8 +168,13 @@ function TableAttributeDialogView({
     setCurrentAttribute(metaAttribute ?? null);
     setCurrentClass(currentClass ?? null);
 
-    // The columns come from the type, so a table without rows still shows them.
-    const nextColumns = table_columns_in_order(metaAttribute?.attribute_type.has_table_attribute ?? []);
+    // The columns come from the type, so a table without rows still shows them. A column
+    // whose UI component is "none" is left out of the grid; `table_rows` matches cells to
+    // columns by attribute, so its cells simply drop out with it. New rows are still made
+    // from the full column list (see createRow), so they keep a cell for it.
+    const nextColumns = table_columns_in_order(metaAttribute?.attribute_type.has_table_attribute ?? []).filter(
+      (column) => !is_hidden_ui_component(column.ui_component),
+    );
 
     const nextFacets: string[][] = nextColumns.map((column) => {
       const uiComponent = (column.ui_component ?? "").toLowerCase();
@@ -296,7 +317,10 @@ function TableAttributeDialogView({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="lg" fullWidth>
-      <DialogTitle>Table Attribute: {attributeInstance.name}</DialogTitle>
+      <DialogTitle>
+        Table Attribute: {attributeInstance.name}
+        {readOnly ? " (read only)" : ""}
+      </DialogTitle>
       <DialogContent>
         <Table sx={{ border: "1.5px solid", width: "100%", tableLayout: "fixed" }} aria-describedby="Table">
           <TableHead>
@@ -328,6 +352,7 @@ function TableAttributeDialogView({
                           cell={cell}
                           uiComponent={uiComponent}
                           isReference={isReference}
+                          readOnly={readOnly || is_read_only_ui_component(uiComponent)}
                           facets={facetsAll[j] ?? []}
                           onCommit={(next) => commitCell(cell, next, columns[j]?.attribute)}
                           onOpenNested={() => setNestedCell({ row: i, col: j })}
@@ -337,6 +362,7 @@ function TableAttributeDialogView({
                         <IconButton
                           size="small"
                           aria-label={`create the ${columns[j]?.attribute?.name} cell of row ${i + 1}`}
+                          disabled={readOnly}
                           onClick={() => run(createMissingCell(i, columns[j]), "create table cell")}
                         >
                           <AddIcon fontSize="small" />
@@ -349,7 +375,7 @@ function TableAttributeDialogView({
                   <IconButton
                     size="small"
                     aria-label={`move row ${i + 1} up`}
-                    disabled={i === 0}
+                    disabled={readOnly || i === 0}
                     onClick={() => run(moveRow(i, i - 1), "move table row")}
                   >
                     <ArrowUpwardIcon fontSize="small" />
@@ -357,7 +383,7 @@ function TableAttributeDialogView({
                   <IconButton
                     size="small"
                     aria-label={`move row ${i + 1} down`}
-                    disabled={i === rows.length - 1}
+                    disabled={readOnly || i === rows.length - 1}
                     onClick={() => run(moveRow(i, i + 1), "move table row")}
                   >
                     <ArrowDownwardIcon fontSize="small" />
@@ -365,6 +391,7 @@ function TableAttributeDialogView({
                   <IconButton
                     size="small"
                     aria-label={`remove row ${i + 1}`}
+                    disabled={readOnly}
                     onClick={() => run(removeRow(i), "remove table row")}
                   >
                     <DeleteIcon fontSize="small" />
@@ -379,13 +406,15 @@ function TableAttributeDialogView({
         <Button onClick={onClose}>Ok</Button>
         <Button onClick={onClose}>Close</Button>
         <Button
+          disabled={readOnly}
           onClick={() => run(createRow(), "create row")}
         >
           Create Row
         </Button>
       </DialogActions>
 
-      {/* Nested table dialog (a column with ui_component 'button'). */}
+      {/* Nested table dialog (a column with ui_component 'button'). Inside a read-only
+          table it is read-only too. */}
       {nestedAttributeInstance && (
         <TableAttributeDialogView
           open={nestedCell !== null}
@@ -393,6 +422,7 @@ function TableAttributeDialogView({
           attribute={nestedAttribute}
           currentClassInstance={currentClassInstance}
           currentPortInstance={currentPortInstance}
+          readOnly={readOnly}
           onClose={() => setNestedCell(null)}
         />
       )}
@@ -400,11 +430,19 @@ function TableAttributeDialogView({
   );
 }
 
-/** One cell: a text field, a slider, a dropdown, a nested-table button or a reference. */
+/**
+ * One cell: a text field, a slider, a dropdown, a nested-table button or a reference.
+ *
+ * A read-only cell (its column's UI component is read-only, or the whole table is)
+ * shows its value but offers no way to change it: text is greyed, the slider and the
+ * reference button are disabled and the dropdown does not open. A nested-table button
+ * still opens its table, which is then read-only as well.
+ */
 function TableAttributeCell({
   cell,
   uiComponent,
   isReference,
+  readOnly,
   facets,
   onCommit,
   onOpenNested,
@@ -413,6 +451,7 @@ function TableAttributeCell({
   cell: AttributeInstance;
   uiComponent: string;
   isReference: boolean;
+  readOnly: boolean;
   facets: string[];
   /** Returns false when the metamodel refused the value; the field then snaps back. */
   onCommit: (next: string) => boolean;
@@ -447,40 +486,31 @@ function TableAttributeCell({
         <Typography variant="body2" sx={{ flex: 1, textAlign: "left" }}>
           {cell.role_instance_from?.name ?? ""}
         </Typography>
-        <Button variant="outlined" size="small" onClick={onOpenReference}>
+        <Button variant="outlined" size="small" disabled={readOnly} onClick={onOpenReference}>
           select
         </Button>
       </Box>
     );
   }
 
-  if (uiComponent === "text") {
+  // "text" and "multi-line", and their read-only variants.
+  const multiline = is_multi_line_ui_component(uiComponent);
+  if (multiline || uiComponent === UI_COMPONENT.TEXT || uiComponent === UI_COMPONENT.TEXT_READ_ONLY) {
     return (
       <TextField
         size="small"
+        multiline={multiline}
+        maxRows={multiline ? 8 : undefined}
         value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onBlur={() => commit(value)}
-        slotProps={{ htmlInput: { "aria-label": cell.name } }}
+        onChange={readOnly ? undefined : (e) => setValue(e.target.value)}
+        onBlur={readOnly ? undefined : () => commit(value)}
+        sx={readOnly ? READ_ONLY_FIELD_SX : undefined}
+        slotProps={{ input: { readOnly }, htmlInput: { "aria-label": cell.name } }}
       />
     );
   }
 
-  if (uiComponent === "multi-line") {
-    return (
-      <TextField
-        size="small"
-        multiline
-        maxRows={8}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onBlur={() => commit(value)}
-        slotProps={{ htmlInput: { "aria-label": cell.name } }}
-      />
-    );
-  }
-
-  if (uiComponent === "slider") {
+  if (uiComponent === UI_COMPONENT.SLIDER) {
     return (
       <Box sx={{ display: "flex", flexDirection: "row", alignItems: "center", width: "100%" }}>
         <Typography component="span" sx={{ mr: "2.2rem", whiteSpace: "nowrap", width: 25 }}>
@@ -492,6 +522,7 @@ function TableAttributeCell({
           max={Number(facets[1])}
           step={Number(facets[2]) || 1}
           value={numerise(value, undefined, Number(facets[0]))}
+          disabled={readOnly}
           onChange={(_e, next) => setValue(stringifyNumber(next as number))}
           onChangeCommitted={(_e, next) => commit(stringifyNumber(next as number))}
           aria-label={cell.name}
@@ -500,14 +531,15 @@ function TableAttributeCell({
     );
   }
 
-  if (uiComponent === "dropdown") {
+  if (uiComponent === UI_COMPONENT.DROPDOWN) {
     return (
-      <FormControl fullWidth required size="small">
+      <FormControl fullWidth required size="small" sx={readOnly ? READ_ONLY_FIELD_SX : undefined}>
         <InputLabel id={`cell-${cell.uuid}`}>{cell.name}</InputLabel>
         <Select
           labelId={`cell-${cell.uuid}`}
           label={cell.name}
           value={value}
+          readOnly={readOnly}
           onChange={(e) => commit(e.target.value)}
         >
           {facets.map((facet) => (
@@ -520,7 +552,7 @@ function TableAttributeCell({
     );
   }
 
-  if (uiComponent === "button") {
+  if (uiComponent === UI_COMPONENT.BUTTON) {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", width: "100%" }}>
         <Button variant="outlined" sx={{ width: "100%" }} onClick={onOpenNested}>

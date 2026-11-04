@@ -105,6 +105,7 @@ import { useUiStore } from "@/resources/store/uiStore";
 import { useLogStore } from "@/resources/store/logStore";
 import { useSelectionStore } from "@/resources/store/selectionStore";
 import { NOT_ALLOWED_MESSAGE } from "@/resources/services/metamodel-constraints";
+import { FILE_ATTRIBUTE_TYPE_UUID } from "@/constants";
 
 /** The Float attribute type's regex, as the database ships it. */
 const FLOAT_REGEX = "^[-+]?[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$";
@@ -595,5 +596,155 @@ describe("AttributeWindow", () => {
     fireEvent.click(button);
 
     expect(useUiStore.getState().dialogs.uploadGltf).toBe(true);
+  });
+
+  // --- the "none" and read-only UI components ---------------------------------------
+
+  it("hides an attribute whose UI component is none, and keeps the others", async () => {
+    selectClassInstanceWith([
+      attributeInstanceJson(),
+      attributeInstanceJson({ uuid: "ai-hidden", uuid_attribute: "attr-hidden", name: "Secret", value: "hidden value" }),
+    ]);
+    mocks.metaUtility.getMetaAttributeWithSequence.mockImplementation(async (uuid: string) =>
+      uuid === "attr-hidden" ? metaAttribute({ uuid, name: "Secret", ui_component: "None" }) : metaAttribute(),
+    );
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+
+    await screen.findByDisplayValue("hello");
+    expect(screen.queryByDisplayValue("hidden value")).toBeNull();
+    expect(screen.queryByLabelText("Secret")).toBeNull();
+  });
+
+  it("drops the Dynamic Attributes heading when every attribute is hidden", async () => {
+    selectClassInstanceWith([attributeInstanceJson()]);
+    mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(metaAttribute({ ui_component: "none" }));
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+
+    await waitFor(() => expect(screen.getByDisplayValue(CLASS_INSTANCE_UUID)).toBeTruthy());
+    expect(screen.queryByText("Dynamic Attributes")).toBeNull();
+    expect(screen.queryByDisplayValue("hello")).toBeNull();
+  });
+
+  it("hides a table attribute whose UI component is none", async () => {
+    selectClassInstanceWith([attributeInstanceJson({ uuid: "ai-table", name: "BPMN Table" })]);
+    mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(metaAttribute({ ui_component: "none" }));
+    mocks.metaUtility.getMetaAttribute.mockResolvedValue(
+      metaAttribute({
+        attribute_type: { uuid: "at-table", name: "Table", regex_value: null, role: null, has_table_attribute: [{ sequence: 1, attribute: { uuid: "attr-col" } }] },
+      }),
+    );
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+
+    await waitFor(() => expect(screen.getByDisplayValue(CLASS_INSTANCE_UUID)).toBeTruthy());
+    expect(screen.queryByText("Table Attributes")).toBeNull();
+    expect(screen.queryByRole("button", { name: "BPMN Table" })).toBeNull();
+  });
+
+  it("shows a read-only text attribute in a read-only field that never commits", async () => {
+    const classInstance = selectClassInstanceWith([attributeInstanceJson()]);
+    mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(metaAttribute({ ui_component: "text-readonly" }));
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    const input = (await screen.findByDisplayValue("hello")) as HTMLInputElement;
+
+    expect(input.tagName).toBe("INPUT");
+    expect(input.readOnly).toBe(true);
+    // An <input type="text-readonly"> would be a type the browser does not know.
+    expect(input.type).toBe("text");
+    expect(screen.getByText("read only")).toBeTruthy();
+
+    fireEvent.change(input, { target: { value: "edited" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.blur(input);
+
+    expect(classInstance.attribute_instance[0].value).toBe("hello");
+    expect(mocks.globalObject.doSceneInstancePatch).toBe(false);
+  });
+
+  it("shows a read-only multi-line attribute in a read-only textarea", async () => {
+    const code = "line one\nline two";
+    selectClassInstanceWith([attributeInstanceJson({ value: code })]);
+    mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(
+      metaAttribute({ ui_component: "multi-line-readonly" }),
+    );
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    const field = (await screen.findByDisplayValue(code, { normalizer: (text) => text })) as HTMLTextAreaElement;
+
+    expect(field.tagName).toBe("TEXTAREA");
+    expect(field.readOnly).toBe(true);
+  });
+
+  it("shows a read-only attribute with facets as text rather than a dropdown", async () => {
+    selectClassInstanceWith([attributeInstanceJson({ value: "catching" })]);
+    mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(
+      metaAttribute({ ui_component: "text-readonly", facets: "catching|throwing" }),
+    );
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+
+    const input = (await screen.findByDisplayValue("catching")) as HTMLInputElement;
+    expect(input.readOnly).toBe(true);
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+
+  it("disables the upload button of a read-only file attribute", async () => {
+    selectClassInstanceWith([attributeInstanceJson({ uuid: "ai-file", name: "Document", value: "" })]);
+    const fileAttribute = metaAttribute({
+      ui_component: "text-readonly",
+      attribute_type: { uuid: FILE_ATTRIBUTE_TYPE_UUID, regex_value: "^.*$", role: null, has_table_attribute: [] },
+    });
+    mocks.metaUtility.getMetaAttribute.mockResolvedValue(fileAttribute);
+    mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(fileAttribute);
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+
+    const button = (await screen.findByRole("button", { name: "Upload File" })) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it("disables the select button of a read-only reference attribute", async () => {
+    selectClassInstanceWith([attributeInstanceJson({ uuid: "ai-ref", name: "Sub-Process Reference" })]);
+    mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(metaAttribute({ ui_component: "text-readonly" }));
+    mocks.metaUtility.getMetaAttribute.mockResolvedValue(
+      metaAttribute({
+        attribute_type: { uuid: "at-ref", regex_value: "^.*$", role: { uuid: "role-1" }, has_table_attribute: [] },
+      }),
+    );
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+
+    await waitFor(() => expect(screen.getByText("Reference Attributes")).toBeTruthy());
+    const button = screen.getByRole("button", { name: "Sub-Process Reference" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it("opens a read-only table attribute's dialog read-only", async () => {
+    selectClassInstanceWith([attributeInstanceJson({ uuid: "ai-table", name: "BPMN Table" })]);
+    mocks.metaUtility.getMetaAttributeWithSequence.mockResolvedValue(metaAttribute({ ui_component: "text-readonly" }));
+    mocks.metaUtility.getMetaAttribute.mockResolvedValue(
+      metaAttribute({
+        attribute_type: { uuid: "at-table", name: "Table", regex_value: null, role: null, has_table_attribute: [{ sequence: 1, attribute: { uuid: "attr-col" } }] },
+      }),
+    );
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+
+    fireEvent.click(await screen.findByRole("button", { name: "BPMN Table" }));
+
+    const payload = useUiStore.getState().getDialogPayload<{ readOnly: boolean }>("tableAttribute");
+    expect(payload?.readOnly).toBe(true);
   });
 });

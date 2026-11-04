@@ -13,6 +13,7 @@ import {
 } from "@mui/material";
 import type { SelectChangeEvent } from "@mui/material";
 import { validate as uuidValidate } from "uuid";
+import { is_multi_line_ui_component, is_read_only_ui_component } from "@gds";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { backendService } from "@/resources/services/backend-service";
 import { logger } from "@/resources/services/logger";
@@ -31,6 +32,7 @@ import {
   reportMetamodelViolation,
 } from "@/resources/services/metamodel-constraints";
 import { applyFieldChange, type AttributeOwner, type EnhancedAttributeInstance } from "./attributeModel";
+import { READ_ONLY_FIELD_SX } from "./readOnlyField";
 
 /**
  * One row of the plain (non-table, non-reference) attribute group — the branchy part
@@ -161,14 +163,23 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
     URL.revokeObjectURL(url);
   }
 
-  const showTextField = facets.length === 0 && !isObject3d && !isImage;
+  // "text-readonly" / "multi-line-readonly": the value is shown, greyed, and nothing in
+  // this row can change it — not the field, nor an upload button. A read-only field
+  // shows the value as text even when the attribute has facets: it picks nothing, so
+  // the dropdown or slider the facets are for has nothing to do.
+  const readOnly = is_read_only_ui_component(uiType);
+  const showTextField = (facets.length === 0 || readOnly) && !isObject3d && !isImage;
   // The "multi-line" UI component, for values with line breaks such as a mechanism's
   // code. A single-line input drops line breaks from what it holds, so editing such a
   // value in one saved it as one line.
-  const multiline = lowerUiType === "multi-line";
+  const multiline = is_multi_line_ui_component(uiType);
   const isSlider = facets.length > 0 && lowerUiType === "slider";
   const isDropdown = facets.length > 0 && lowerUiType === "dropdown";
   const valueIsFileUuid = uuidValidate(attributeInstance.value);
+
+  // The UI component doubles as the input's type ("text", "number" in older metamodels).
+  // A read-only one is not a type an <input> knows, so it falls back to plain text.
+  const inputType = multiline ? undefined : readOnly ? "text" : uiType || "text";
 
   return (
     <Box className="attribute" sx={{ mb: 1 }}>
@@ -178,22 +189,24 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
           fullWidth
           size="small"
           label={attributeInstance.name}
-          type={multiline ? undefined : uiType || "text"}
+          type={inputType}
           multiline={multiline}
           maxRows={multiline ? 8 : undefined}
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          slotProps={readOnly ? { input: { readOnly: true } } : undefined}
+          sx={readOnly ? READ_ONLY_FIELD_SX : undefined}
+          onChange={readOnly ? undefined : (e) => setValue(e.target.value)}
           onKeyDown={(e) => {
             // Enter commits without waiting for blur, so the scene vizrep updates
             // immediately, matching how a plain <input> commits on Enter. In a textarea
             // it is a line break, and the value is committed on blur.
-            if (e.key === "Enter" && !multiline) {
+            if (e.key === "Enter" && !multiline && !readOnly) {
               e.preventDefault();
               commit((e.target as HTMLInputElement).value);
             }
           }}
-          onBlur={() => commit(value)}
-          helperText={uiType}
+          onBlur={readOnly ? undefined : () => commit(value)}
+          helperText={readOnly ? "read only" : uiType}
         />
       )}
 
@@ -204,6 +217,7 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
           <Button
             variant="outlined"
             sx={{ width: "100%" }}
+            disabled={readOnly}
             onClick={() => openDialog("uploadFile", { attributeInstance })}
           >
             {!valueIsFileUuid ? "Upload File" : "Replace File"}
@@ -212,6 +226,7 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
             <Button
               variant="outlined"
               sx={{ width: "100%" }}
+              disabled={readOnly}
               onClick={() =>
                 void deleteFile().catch((err) =>
                   logger.log("delete file failed: " + describeError(err), "error"),
@@ -291,6 +306,7 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
         <Button
           variant="outlined"
           sx={{ width: "100%" }}
+          disabled={readOnly}
           onClick={() => openDialog("uploadGltf", { attributeInstance })}
         >
           {attributeInstance.value !== OBJECT_3D_DEFAULT_VALUE ? "Replace 3D Object" : "Upload 3D Object"}
@@ -302,6 +318,7 @@ export default function PlainAttributeRow({ enhanced, isFileAttribute, owner, on
         <Button
           variant="outlined"
           sx={{ width: "100%" }}
+          disabled={readOnly}
           onClick={() => openDialog("uploadImage", { attributeInstance })}
         >
           {attributeInstance.value !== IMAGE_DEFAULT_VALUE ? "Replace Image" : "Upload Image"}

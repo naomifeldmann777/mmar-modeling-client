@@ -1,10 +1,11 @@
-import type {
-  Attribute,
-  AttributeInstance,
-  ClassInstance,
-  PortInstance,
-  RelationclassInstance,
-  SceneInstance,
+import {
+  is_hidden_ui_component,
+  type Attribute,
+  type AttributeInstance,
+  type ClassInstance,
+  type PortInstance,
+  type RelationclassInstance,
+  type SceneInstance,
 } from "@gds";
 import { globalObject, globalSelectedObject } from "@/engine";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
@@ -94,8 +95,8 @@ async function getFileTypeAttributeInstanceUuids(
 /**
  * Resolves the selected THREE object back to its class / port / relationclass instance,
  * enriches every attribute instance with its meta attribute (sequence, ui_component,
- * facets), sorts by sequence and splits the result into the three groups the window
- * renders.
+ * facets), drops those whose UI component is "none", sorts by sequence and splits the
+ * result into the three groups the window renders.
  *
  * SCENE FALLBACK: when the selection resolves to no model element, the OPEN SCENE
  * INSTANCE's own attributes are shown instead. The rest of the function needs no special
@@ -192,6 +193,10 @@ export async function buildAttributeGroups(): Promise<AttributeGroups> {
     // orphaned attribute instance). Skipping such a row is the closest safe
     // equivalent — a throw inside a React effect would blank the whole window.
     if (!metaAttribute) continue;
+
+    // The "none" UI component hides the attribute from the window — whichever group it
+    // would land in. The instance and its value are untouched.
+    if (is_hidden_ui_component(metaAttribute.ui_component)) continue;
 
     //if sequence is not set in meta attribute, set it to 1000, otherwise set value
     const sequence = metaAttribute.sequence ?? 1000;
