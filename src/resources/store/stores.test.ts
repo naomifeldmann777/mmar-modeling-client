@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useLogStore } from "./logStore";
 import { useUiStore } from "./uiStore";
-import { useTabsStore } from "./tabsStore";
+import { useTabsStore, orderedTabIndices } from "./tabsStore";
 
 describe("logStore", () => {
   beforeEach(() => {
@@ -104,5 +104,89 @@ describe("tabsStore", () => {
     s.closeTab(0);
     expect(useTabsStore.getState().selectedTab).toBe(-1);
     expect(useTabsStore.getState().tabs).toEqual([]);
+  });
+
+  describe("display order", () => {
+    beforeEach(() => {
+      useTabsStore.setState({ tabs: [], selectedTab: -1, displayOrder: [] });
+    });
+
+    function open(...uuids: string[]) {
+      for (const uuid of uuids) useTabsStore.getState().openTab({ name: uuid, uuid, isShared: false });
+    }
+    const shown = () => {
+      const { tabs, displayOrder } = useTabsStore.getState();
+      return orderedTabIndices(tabs, displayOrder).map((i) => tabs[i].uuid);
+    };
+
+    it("shows tabs in open order, new tabs at the end", () => {
+      open("a", "b", "c");
+      expect(shown()).toEqual(["a", "b", "c"]);
+    });
+
+    it("moveTab reorders the bar only: indices and the selection stay put", () => {
+      open("a", "b", "c"); // selected = 2 (c)
+      useTabsStore.getState().moveTab("c", 0);
+      expect(shown()).toEqual(["c", "a", "b"]);
+      expect(useTabsStore.getState().tabs.map((t) => t.uuid)).toEqual(["a", "b", "c"]);
+      expect(useTabsStore.getState().selectedTab).toBe(2);
+
+      useTabsStore.getState().moveTab("a", 99); // clamped to the last slot
+      expect(shown()).toEqual(["c", "b", "a"]);
+    });
+
+    it("moveTab ignores an unknown uuid", () => {
+      open("a", "b");
+      const before = useTabsStore.getState();
+      useTabsStore.getState().moveTab("nope", 0);
+      expect(useTabsStore.getState()).toBe(before);
+    });
+
+    it("closing the active tab selects the tab that slides into its slot on the bar", () => {
+      open("a", "b", "c");
+      useTabsStore.getState().moveTab("c", 0); // bar: c a b
+      useTabsStore.getState().selectTab(2); // c, leftmost on the bar
+      useTabsStore.getState().closeTab(2);
+      // Its right-hand neighbour on the bar is a (index 0), not the open-order clamp (b).
+      const s = useTabsStore.getState();
+      expect(s.tabs[s.selectedTab].uuid).toBe("a");
+      expect(shown()).toEqual(["a", "b"]);
+    });
+
+    it("closing the active rightmost tab selects the new rightmost", () => {
+      open("a", "b", "c");
+      useTabsStore.getState().moveTab("a", 2); // bar: b c a
+      useTabsStore.getState().selectTab(0); // a, rightmost on the bar
+      useTabsStore.getState().closeTab(0);
+      const s = useTabsStore.getState();
+      expect(s.tabs[s.selectedTab].uuid).toBe("c");
+    });
+
+    it("a newly opened tab goes to the end of a reordered bar", () => {
+      open("a", "b");
+      useTabsStore.getState().moveTab("b", 0);
+      open("c");
+      expect(shown()).toEqual(["b", "a", "c"]);
+    });
+
+    it("reset clears the order", () => {
+      open("a", "b");
+      useTabsStore.getState().moveTab("b", 0);
+      useTabsStore.getState().reset();
+      expect(useTabsStore.getState().displayOrder).toEqual([]);
+    });
+  });
+
+  describe("orderedTabIndices", () => {
+    const tab = (uuid: string) => ({ name: uuid, uuid, isShared: false });
+
+    it("skips stale uuids and duplicates, and appends unlisted tabs in open order", () => {
+      const tabs = [tab("a"), tab("b"), tab("c")];
+      expect(orderedTabIndices(tabs, ["gone", "c", "c", "a"])).toEqual([2, 0, 1]);
+    });
+
+    it("falls back to open order with no display order at all", () => {
+      expect(orderedTabIndices([tab("a"), tab("b")], [])).toEqual([0, 1]);
+    });
   });
 });

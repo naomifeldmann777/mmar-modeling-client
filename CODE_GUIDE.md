@@ -302,7 +302,7 @@ holds both data and the functions that change it.
 | [authStore](src/resources/store/authStore.ts) | itself: `login` / `logout` / `restore` | `currentUser`, decoded from the JWT | AppLayout, Toolbar |
 | [logStore](src/resources/store/logStore.ts) | `logger.log()` | log entries (newest first, capped at 500) + the snackbar | LogWindow, AppSnackbar |
 | [uiStore](src/resources/store/uiStore.ts) | views | which dialog is open and its payload; `loading`; a mirror of `globalObject.autoSave` | every dialog, LoadingWindow, AutoSave |
-| [tabsStore](src/resources/store/tabsStore.ts) | instance-utility (open), tabActions (select / rename / close), session-reset | `tabs[]` (name, uuid, isShared) + `selectedTab` | TabBar, palettes, ModelTree, UserLegend |
+| [tabsStore](src/resources/store/tabsStore.ts) | instance-utility (open), tabActions (select / rename / close), TabBar (reorder), session-reset | `tabs[]` (name, uuid, isShared) + `selectedTab`, both in open order; `displayOrder` (uuids as the bar shows them) | TabBar, palettes, ModelTree, UserLegend |
 | [stateStore](src/resources/store/stateStore.ts) | `globalStateObject.setState` | the active interaction mode's name | StateWindow, RightNav, UserInfoDialog |
 | [selectionStore](src/resources/store/selectionStore.ts) | the interaction handler; `bump()` from anything that edits the selected instance in place | selected uuid + kind + a `revision` counter | AttributeWindow, ModelTree |
 | [collabStore](src/resources/store/collabStore.ts) | shared-doc-service | per-tab connection status, access, banner, users | UserLegend, AutoSave |
@@ -708,7 +708,14 @@ Nothing else should assign `globalObject.selectedTab` or splice `tabContext`.
 - **Closing** goes in a fixed order: remove the tab's remote cursors and selection
   boxes, detach its shared session, splice `tabContext`, drop its undo history, let the
   **store** clamp the selection, then reconcile the engine to whatever index the store
-  settled on (or to an empty scene if none is left).
+  settled on (or to an empty scene if none is left). Closing the active tab selects the
+  tab that slides into its slot **on the tab bar**, as a browser does.
+- **Reordering** (dragging a tab) changes `tabsStore.displayOrder` and nothing else. A
+  tab keeps its index in `tabs` and `tabContext` for as long as it is open, and every
+  index in the app (`selectedTab`, the shared sessions and `collabStore`, which are keyed
+  by tab index) means that open-order index. Only the tab bar reads `displayOrder`, via
+  `orderedTabIndices`. Keep it that way: moving tabs in `tabContext` would strand their
+  shared sessions, the same way the close limitation in `tabActions.closeTab` does.
 - **Renaming** (`renameSceneInstance`) updates the engine's SceneInstance, the tree
   node and the tab label together, PATCHes when auto-save is on, reverts everywhere if
   the server refuses, and records an undo step only for the active scene, and only once
@@ -1006,10 +1013,21 @@ showing the previous tab's state.
 
 ### [TabBar.tsx](src/views/layout/TabBar.tsx) and [StateWindow.tsx](src/views/state-window/StateWindow.tsx)
 
-One MUI `Tab` per `tabsStore` entry. Selecting runs `switchToTab`, the ✕ runs
-`closeTab`, and a right-click offers Rename, all through
-[tabActions](#tabs-two-halves-in-lockstep). The ✕ stops propagation so MUI doesn't also
-treat the click as "select". StateWindow shows the current mode (from `stateStore`), a
+One MUI `Tab` per `tabsStore` entry, drawn in `displayOrder`. Selecting runs
+`switchToTab`, the ✕ (or a middle click) runs `closeTab`, and a right-click offers
+Rename, all through [tabActions](#tabs-two-halves-in-lockstep), always with the tab's
+open-order index (its `value`), never its position on the bar. The ✕ stops propagation
+so MUI doesn't also treat the click as "select".
+
+Every tab is `TAB_WIDTH` wide, so the ✕ buttons sit at a fixed spacing and closing a tab
+slides the next one's ✕ under the pointer. Dragging a tab reorders the bar
+([useTabDrag](src/views/layout/useTabDrag.ts)): the drag translates an inner "face" box,
+not the `Tab`, because MUI's `Tabs` re-measures the selected `Tab` after every render
+and would scroll to chase it. For the same reason MUI's sliding indicator is hidden, and
+each face draws its own underline. Drag offsets go in inline `style`, not `sx`, so a drag
+does not create a new Emotion class for every pixel.
+
+StateWindow shows the current mode (from `stateStore`), a
 View Mode button and an Info button that blinks red ten times on mount to point new users
 at the interaction help.
 
