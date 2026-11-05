@@ -47,10 +47,13 @@ const CURRENT_UUID = "11111111-1111-4111-8111-111111111111";
 vi.mock("@/resources/services/instance-utility", () => ({
   instanceUtility: {
     get_current_class_instance_uuid: vi.fn(async () => CURRENT_UUID),
+    getAnyInstance: vi.fn(async () => undefined),
   },
 }));
 
 const { graphicContext } = await import("@/engine/graphic-context");
+const { vizRepReads, readKeys } = await import("@/engine/vizrep-reads");
+const { expressionUtility } = await import("@/resources/services/expression-utility");
 
 /** A real vizRep pulled from the live demo metamodel: e3-Value Model -> class "e3-Value_bendpoint". */
 const REAL_BENDPOINT_VIZREP = `/** @param {GraphicContext} gc */
@@ -117,6 +120,35 @@ describe("runVizRepFunction", () => {
     // graphic_text seeds the positional custom_variables the label is placed by.
     expect(label.userData.custom_variables.x_rel.value).toBe(0.5);
     expect(label.userData.custom_variables.rw.value).toBe(1);
+  });
+});
+
+describe("runVizRepFunction — tracking what the vizRep reads", () => {
+  const READING_VIZREP = `async function vizRep(gc) {
+    await gc.setVariable('drawn', (await gc.expression.self()).uuid, false);
+    await gc.dynval('meta-attr', 'other-instance');
+  }`;
+
+  beforeEach(() => vizRepReads.clear());
+
+  it("records the reads of the instance it is given, and answers self() with it", async () => {
+    await graphicContext.runVizRepFunction(READING_VIZREP, makeClassInstance());
+
+    expect(graphicContext.custom_variables.drawn.value).toBe(CURRENT_UUID);
+    expect(vizRepReads.readers([readKeys.attribute("other-instance", "meta-attr")])).toEqual(new Set([CURRENT_UUID]));
+  });
+
+  it("hands the plain expression API back afterwards, also when the vizRep throws", async () => {
+    await expect(graphicContext.runVizRepFunction(`async function vizRep(gc) { throw new Error("boom"); }`, makeClassInstance())).rejects.toThrow("boom");
+
+    expect((graphicContext as unknown as { expression: unknown }).expression).toBe(expressionUtility);
+    expect(vizRepReads.hasRecord(CURRENT_UUID)).toBe(true);
+  });
+
+  it("records nothing when it is not told which instance it draws", async () => {
+    await graphicContext.runVizRepFunction(`async function vizRep(gc) { await gc.dynval('meta-attr', 'other-instance'); }`);
+
+    expect(vizRepReads.readers([readKeys.attribute("other-instance", "meta-attr")]).size).toBe(0);
   });
 });
 

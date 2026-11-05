@@ -14,12 +14,17 @@ const mocks = vi.hoisted(() => ({
   graphicContext: {
     resetInstance: vi.fn(),
     runVizRepFunction: vi.fn(),
+    drawVizRep: vi.fn(),
     drawVizRep_rel: vi.fn(),
     current_instance_object: undefined,
   } as any,
+  /** What the per-port GraphicContexts were asked to run, and the pointers they saw. */
+  portRuns: [] as { instance: unknown; currentClass: unknown; currentPort: unknown }[],
   metaUtility: {
     getTabContextSceneType: vi.fn(),
     getMetaRelationclass: vi.fn(),
+    getMetaClass: vi.fn(),
+    getMetaPort: vi.fn(),
     parseMetaFunction: vi.fn(),
   } as any,
   instanceUtility: {
@@ -43,7 +48,16 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/engine/global-definition", () => ({ globalObject: mocks.globalObject }));
 vi.mock("@/engine/global-state-object", () => ({ globalStateObject: mocks.globalStateObject }));
 vi.mock("@/engine/graphic-context", () => ({
-  GraphicContext: class {},
+  GraphicContext: class {
+    async resetInstance() {}
+    async runVizRepFunction(_code: unknown, instance: unknown) {
+      mocks.portRuns.push({ instance, currentClass: mocks.globalObject.current_class_instance, currentPort: mocks.globalObject.current_port_instance });
+    }
+    async drawVizRepPort() {
+      return { position: { set: vi.fn() } };
+    }
+    attachPort() {}
+  },
   graphicContext: mocks.graphicContext,
 }));
 vi.mock("@/engine/instance-creation-handler", () => ({
@@ -317,5 +331,33 @@ describe("persistency-handler.checkIfRelationclassinstanceInScene", () => {
     await persistencyHandler.checkIfRelationclassinstanceInScene();
 
     expect(mocks.graphicContext.drawVizRep_rel).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A port's vizRep reads attributes through the expression API, which looks in the class
+ * instance first. The first draw used to leave the owning class set while its ports were
+ * drawn, so a port reading "Name" showed its CLASS's name — and the port's own only after
+ * its next redraw, which draws it with no class set.
+ */
+describe("persistency-handler.checkIfClassinstanceInScene — ports", () => {
+  it("draws each port as the port, then hands the class back", async () => {
+    const port = { uuid: "port-1", uuid_port: "meta-port", coordinates_2d: { x: 0, y: 0, z: 0 } };
+    const classInstance = { uuid: "class-1", uuid_class: "meta-class", coordinates_2d: { x: 0, y: 0, z: 0 }, port_instance: [port] };
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue({ class_instances: [classInstance] });
+    Object.assign(mocks.globalObject, { dragObjects: [], render: false, current_class_instance: undefined, current_port_instance: undefined });
+    mocks.metaUtility.getMetaClass.mockResolvedValue({ geometry: "class vizRep" });
+    mocks.metaUtility.getMetaPort.mockResolvedValue({ geometry: "port vizRep" });
+    mocks.metaUtility.parseMetaFunction.mockImplementation(async (code: string) => code);
+    mocks.graphicContext.drawVizRep.mockResolvedValue({ uuid: "class-1" });
+    mocks.portRuns.length = 0;
+
+    await persistencyHandler.checkIfClassinstanceInScene();
+
+    // The class itself is drawn as the class, tracked.
+    expect(mocks.graphicContext.runVizRepFunction).toHaveBeenCalledWith("class vizRep", classInstance);
+    expect(mocks.portRuns).toEqual([{ instance: port, currentClass: undefined, currentPort: port }]);
+    expect(mocks.globalObject.current_class_instance).toBe(classInstance);
+    expect(mocks.globalObject.current_port_instance).toBeUndefined();
   });
 });

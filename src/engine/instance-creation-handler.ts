@@ -240,7 +240,7 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     //we store the metafunction in the class_instance. With that we can recalculate the objects if necessary
     bendpoint_class_instance.geometry = metaFunction;
 
-    await this.gc.runVizRepFunction(metaFunction);
+    await this.gc.runVizRepFunction(metaFunction, bendpoint_class_instance);
     await this.gc.drawVizRep(new THREE.Vector3(x, y, z), bendpoint_class_instance);
     this.globalObjectInstance.render = true;
 

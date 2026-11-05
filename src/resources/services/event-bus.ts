@@ -102,6 +102,8 @@ export interface EventPayloads {
   checkForVizRepUpdateByAttributeInstance: AttributeInstance;
   /** A relation was added or removed: redraw the instances at its two ends. */
   checkForVizRepUpdateByRelationInstance: RelationclassInstance;
+  /** A tab is shown and ready to draw into: run the redraws held back while it was not. */
+  checkForVizRepUpdateOfActiveTab: void;
 
   // Undo / redo history
   historyRecord: HistoryRecordPayload;

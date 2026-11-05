@@ -106,6 +106,23 @@ describe("switchToTab", () => {
     expect(mocks.eventBus.publish).toHaveBeenCalledWith("tabChanged");
     expect(mocks.globalSelectedObject.removeObject).toHaveBeenCalled();
   });
+
+  // Redraws held back while the tab was in the background may only run once its scene is
+  // the one drawn into — `tabChanged` goes out before the swap.
+  it("asks for the tab's held-back redraws once its scene is the one drawn into", async () => {
+    seedTabs(["A", "B"]);
+    mocks.engine.isInitialized = true;
+    const shown = mocks.globalObject.tabContext[0] as { threeScene: unknown };
+    shown.threeScene = { add: vi.fn() };
+    let sceneWhenAsked: unknown;
+    mocks.eventBus.publish.mockImplementation((channel: string) => {
+      if (channel === "checkForVizRepUpdateOfActiveTab") sceneWhenAsked = mocks.globalObject.scene;
+    });
+
+    await switchToTab(0);
+
+    expect(sceneWhenAsked).toBe(shown.threeScene);
+  });
 });
 
 describe("closeTab", () => {

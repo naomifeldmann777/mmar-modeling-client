@@ -163,7 +163,7 @@ export class PersistencyHandler {
           this.gc.current_instance_object = class_instance;
 
           //we set the metafunction to the "geometry" property of the class_instance
-          await this.gc.runVizRepFunction(metaFunction);
+          await this.gc.runVizRepFunction(metaFunction, class_instance);
           classObject3D = await this.gc.drawVizRep(point, class_instance);
           this.globalObjectInstance.render = true;
           this.gc.resetInstance();
@@ -178,6 +178,9 @@ export class PersistencyHandler {
         for (const port_instance of class_instance.port_instance) {
           //set current port_instance in global object
           this.globalObjectInstance.current_port_instance = port_instance;
+          // With no class set, the port's vizRep reads the port's own attributes — the
+          // expression API looks in the class first — as it does on every later redraw.
+          this.globalObjectInstance.current_class_instance = undefined as any;
 
           //store position from port_instance
           const oldPosition = new THREE.Vector3(
@@ -200,7 +203,7 @@ export class PersistencyHandler {
           await newGC.resetInstance();
 
           //we call the function that is stored in the metamodel
-          await newGC.runVizRepFunction(metaFunctionPort);
+          await newGC.runVizRepFunction(metaFunctionPort, port_instance);
           // we call the function for drawing the information in the newGC
           const portObject3D = await newGC.drawVizRepPort(new THREE.Vector3(0, 0, 0), port_instance);
           //we add the portObject to the classObject
@@ -209,8 +212,9 @@ export class PersistencyHandler {
           //we set the position of the portObject according to the stored position in the port_instance
           portObject3D.position.set(oldPosition.x, oldPosition.y, oldPosition.z);
 
-          //reset current_port_instance
+          //reset current_port_instance, and hand the class back
           this.globalObjectInstance.current_port_instance = undefined as any;
+          this.globalObjectInstance.current_class_instance = class_instance;
           this.globalObjectInstance.render = true;
         }
       }
@@ -246,7 +250,7 @@ export class PersistencyHandler {
       );
 
       //we call the function that is stored in the metamodel
-      await this.gc.runVizRepFunction(metaFunction);
+      await this.gc.runVizRepFunction(metaFunction, relationclass_instance);
       // we call the function for drawing the information in the gc
       // The line comes back from the draw call. This pass draws relations the LOCAL USER
       // did not just click into being — a peer's, or a scene being loaded — so it must

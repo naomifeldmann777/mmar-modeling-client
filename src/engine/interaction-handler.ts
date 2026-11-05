@@ -355,7 +355,7 @@ import { runExclusive } from "@/resources/services/draw-lock";
         await this.gc.resetInstance();
 
         //we call the function that is stored in the metamodel
-        await this.gc.runVizRepFunction(metaFunction);
+        await this.gc.runVizRepFunction(metaFunction, class_instance);
         // we call the function for drawing the information in the gc
         const classObject3D = await this.gc.drawVizRep(new THREE.Vector3(x, y, z), class_instance);
         this.globalObjectInstance.render = true;
@@ -366,6 +366,9 @@ import { runExclusive } from "@/resources/services/draw-lock";
         for (const port_instance of class_instance.port_instance) {
           //set current port_instance in global object
           this.globalObjectInstance.current_port_instance = port_instance;
+          // With no class set, the port's vizRep reads the port's own attributes — the
+          // expression API looks in the class first — as it does on every later redraw.
+          this.globalObjectInstance.current_class_instance = undefined as unknown as ClassInstance;
 
           const newGC = new GraphicContext();
 
@@ -379,7 +382,7 @@ import { runExclusive } from "@/resources/services/draw-lock";
           await newGC.resetInstance();
 
           //we call the function that is stored in the metamodel
-          await newGC.runVizRepFunction(metaFunctionPort);
+          await newGC.runVizRepFunction(metaFunctionPort, port_instance);
           // we call the function for drawing the information in the newGC
           const portObject3D = await newGC.drawVizRepPort(new THREE.Vector3(0, 0, 0), port_instance);
           //we add the portObject to the classObject
@@ -387,8 +390,9 @@ import { runExclusive } from "@/resources/services/draw-lock";
           //we set the position of the portObject according to the meta definition
           portObject3D.position.set(metaPort.coordinates_2d!.x, metaPort.coordinates_2d!.y, metaPort.coordinates_2d!.z);
 
-          //reset current_port_isntance
+          //reset current_port_isntance, and hand the class back
           this.globalObjectInstance.current_port_instance = undefined as unknown as PortInstance;
+          this.globalObjectInstance.current_class_instance = class_instance;
           this.globalObjectInstance.render = true;
         }
 
@@ -504,7 +508,7 @@ import { runExclusive } from "@/resources/services/draw-lock";
       this.logger.log("created role_instance_from", "close");
 
       //we call the function that is stored in the metamodel
-      await this.gc.runVizRepFunction(metaFunction);
+      await this.gc.runVizRepFunction(metaFunction, relationclass_instance);
       // we call the function for drawing the information in the gc
       // The draw hands the line back directly. It becomes the ACTIVE line — the one the
       // rest of this gesture (bendpoints, the closing click) works on — and only a draw

@@ -49,6 +49,7 @@ const utils = vi.hoisted(() => ({
     getAllRelationClassInstances: vi.fn(async () => [] as unknown[]),
     getClassInstance: vi.fn(),
     getPortInstance: vi.fn(),
+    getAllPortInstancesOfTabContext: vi.fn(async () => [] as unknown[]),
     getSceneInstance: vi.fn(),
     getTabContextSceneInstance: vi.fn(),
     getAllAttributeInstancesFromObjectInstanceRecursively: vi.fn(async () => [] as unknown[]),
@@ -65,6 +66,8 @@ vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: utils
 vi.mock("@/resources/services/meta-utility", () => ({ metaUtility: utils.metaUtility }));
 
 const { eventBus } = await import("@/resources/services/event-bus");
+// Real: what the checker decides from is what this module recorded.
+const { vizRepReads, readKeys } = await import("@/engine/vizrep-reads");
 // Importing the module constructs the singleton, which is what subscribes the bus.
 const { vizrepUpdateChecker } = await import("@/engine/vizrep-update-checker");
 
@@ -99,11 +102,20 @@ beforeEach(() => {
   fakeGlobal.globalObject.current_class_instance = null;
   utils.instanceUtility.getAllRelationClassInstances.mockResolvedValue([]);
   utils.instanceUtility.getClassInstance.mockResolvedValue(makeClassInstance());
+  utils.instanceUtility.getAllPortInstancesOfTabContext.mockResolvedValue([]);
+  utils.instanceUtility.getSceneInstance.mockResolvedValue(undefined);
+  fakeGlobal.globalObject.tabContext = [];
+  fakeGlobal.globalObject.selectedTab = 0;
+  vizRepReads.clear();
   utils.metaUtility.getMetaClass.mockResolvedValue({ geometry: GEOMETRY_REFERENCING_ATTR });
   utils.metaUtility.getMetaAttribute.mockResolvedValue({ name: "label" });
 });
 
-describe("checkForVizRepUpdate", () => {
+/**
+ * An instance whose vizRep has not run under tracking has no record of what it reads:
+ * for it, the old rule decides — whether the vizRep source names the changed attribute.
+ */
+describe("checkForVizRepUpdate — an instance with no record of its reads", () => {
   it("re-runs and updates the vizrep when the geometry references the changed attribute", async () => {
     // `current_class_instance` is what the running vizRep code reads its values through
     // (gc.expression.attrval), so capture it AT THE MOMENT the geometry runs.
@@ -114,7 +126,8 @@ describe("checkForVizRepUpdate", () => {
 
     await vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance());
 
-    expect(gcMock.graphicContext.runVizRepFunction).toHaveBeenCalledWith(GEOMETRY_REFERENCING_ATTR);
+    // Tracked: handed the instance being drawn.
+    expect(gcMock.graphicContext.runVizRepFunction).toHaveBeenCalledWith(GEOMETRY_REFERENCING_ATTR, expect.objectContaining({ uuid: CLASS_INSTANCE_UUID }));
     expect(gcMock.graphicContext.updateVizRep).toHaveBeenCalledTimes(1);
     // The instance must be the one the vizrep code will read its values from.
     expect((gcMock.graphicContext.updateVizRep.mock.calls[0] as unknown[])[0]).toMatchObject({ uuid: CLASS_INSTANCE_UUID });
@@ -198,7 +211,7 @@ describe("checkForVizRepUpdate", () => {
 
     await vizrepUpdateChecker.checkForVizRepUpdate(sceneAttribute);
 
-    expect(gcMock.graphicContext.runVizRepFunction).toHaveBeenCalledWith(GEOMETRY_REFERENCING_ATTR);
+    expect(gcMock.graphicContext.runVizRepFunction).toHaveBeenCalledWith(GEOMETRY_REFERENCING_ATTR, sceneInstance);
     expect(gcMock.graphicContext.updateVizRep).toHaveBeenCalledWith(sceneInstance);
   });
 
@@ -217,25 +230,29 @@ describe("event-bus channels", () => {
     eventBus.publish("checkForVizRepUpdateByAttributeInstance", makeAttributeInstance());
     await flush();
 
-    expect(gcMock.graphicContext.runVizRepFunction).toHaveBeenCalledWith(GEOMETRY_REFERENCING_ATTR);
+    expect(gcMock.graphicContext.runVizRepFunction).toHaveBeenCalledWith(GEOMETRY_REFERENCING_ATTR, expect.objectContaining({ uuid: CLASS_INSTANCE_UUID }));
     expect(gcMock.graphicContext.updateVizRep).toHaveBeenCalledTimes(1);
   });
 
-  it("'checkForVizRepUpdate' sweeps every attribute instance of the open scene", async () => {
-    const attributeInstance = makeAttributeInstance();
-    fakeGlobal.globalObject.tabContext = [{ sceneInstance: { attribute_instances: [attributeInstance] } }];
+  it("'checkForVizRepUpdate' redraws every class and relation instance of the open scene, whatever they read", async () => {
+    const classInstance = makeClassInstance();
+    const relation = RelationclassInstance.fromJS({ uuid: "rel-1", uuid_relationclass: "meta-rel", custom_variables: {} }) as RelationclassInstance;
+    fakeGlobal.globalObject.tabContext = [{ sceneInstance: { class_instances: [classInstance], relationclasses_instances: [relation] } }];
+    utils.instanceUtility.getClassInstance.mockImplementation(async (uuid: string) => [classInstance, relation].find((instance) => instance.uuid === uuid));
+    utils.metaUtility.getMetaClass.mockResolvedValue({ geometry: GEOMETRY_IGNORING_ATTR });
+    utils.metaUtility.getMetaRelationclass.mockResolvedValue({ geometry: GEOMETRY_IGNORING_ATTR });
 
     eventBus.publish("checkForVizRepUpdate");
     await flush();
+    await flush();
 
-    expect(gcMock.graphicContext.updateVizRep).toHaveBeenCalledTimes(1);
+    expect(gcMock.graphicContext.updateVizRep.mock.calls.map((call) => (call as unknown[])[0])).toEqual([classInstance, relation]);
   });
 
-  it("de-duplicates a sweep by class instance so each instance is redrawn once", async () => {
-    // Two attributes on the SAME class instance -> a single redraw.
-    fakeGlobal.globalObject.tabContext = [{ sceneInstance: { attribute_instances: [makeAttributeInstance(), makeAttributeInstance()] } }];
+  it("redraws an instance once when a sweep is asked for twice before it runs", async () => {
+    fakeGlobal.globalObject.tabContext = [{ sceneInstance: { class_instances: [makeClassInstance()], relationclasses_instances: [] } }];
 
-    await vizrepUpdateChecker.checkForVisualizationUpdate();
+    await Promise.all([vizrepUpdateChecker.checkForVisualizationUpdate(), vizrepUpdateChecker.checkForVisualizationUpdate()]);
 
     expect(gcMock.graphicContext.updateVizRep).toHaveBeenCalledTimes(1);
   });
@@ -450,7 +467,7 @@ describe("checkForVizRepUpdateOfRelationEnds", () => {
       [OTHER_CLASS_INSTANCE_UUID]: classInstanceWith(OTHER_CLASS_INSTANCE_UUID),
     };
     utils.instanceUtility.getClassInstance.mockImplementation(async (uuid: string) => scene[uuid]);
-    utils.instanceUtility.getPortInstance.mockResolvedValue(undefined);
+    utils.instanceUtility.getAllPortInstancesOfTabContext.mockResolvedValue([]);
     // Draws nothing any attribute would name: a relation change redraws regardless.
     utils.metaUtility.getMetaClass.mockResolvedValue({ geometry: GEOMETRY_IGNORING_ATTR });
   });
@@ -498,7 +515,7 @@ describe("checkForVizRepUpdateOfRelationEnds", () => {
 
   it("redraws a port end as the port, reading the port's own attributes", async () => {
     const port = PortInstance.fromJS({ uuid: PORT_INSTANCE_UUID, uuid_port: "meta-port", custom_variables: {}, attribute_instances: [] }) as PortInstance;
-    utils.instanceUtility.getPortInstance.mockImplementation(async (uuid: string) => (uuid === PORT_INSTANCE_UUID ? port : undefined));
+    utils.instanceUtility.getAllPortInstancesOfTabContext.mockResolvedValue([port]);
     const PORT_GEOMETRY = "async function vizRep(gc) { /* the port */ }";
     utils.metaUtility.getMetaPort.mockResolvedValue({ geometry: PORT_GEOMETRY });
     const userSelection = { uuid: "the-users-own-selection" };
@@ -538,5 +555,169 @@ describe("checkForVizRepUpdateOfRelationEnds", () => {
     await flush();
 
     expect(redrawn()).toEqual([scene[CLASS_INSTANCE_UUID], scene[OTHER_CLASS_INSTANCE_UUID]]);
+  });
+});
+
+/** Record what a tracked vizRep run of `instanceUuid` would: these calls, nothing else. */
+async function recordReads(instanceUuid: string, calls: [string, ...unknown[]][]) {
+  const expression = Object.fromEntries(calls.map(([method]) => [method, async () => undefined]));
+  const run = vizRepReads.tracking(expression, { uuid: instanceUuid } as never);
+  for (const [method, ...args] of calls) await (run.expression as Record<string, (...args: unknown[]) => Promise<unknown>>)[method](...args);
+  run.done();
+}
+
+/**
+ * Once an instance's vizRep has run under tracking, what that run read decides — not
+ * what its source text happens to mention.
+ */
+describe("checkForVizRepUpdate — recorded reads decide", () => {
+  const OTHER = "56565656-5656-4565-8565-565656565656";
+  let instances: Record<string, ClassInstance>;
+  const redrawn = () => gcMock.graphicContext.updateVizRep.mock.calls.map((call) => ((call as unknown[])[0] as { uuid: string }).uuid);
+
+  beforeEach(() => {
+    gcMock.graphicContext.runVizRepFunction.mockImplementation(async () => {});
+    gcMock.graphicContext.updateVizRep.mockImplementation(async () => {});
+    instances = { [CLASS_INSTANCE_UUID]: makeClassInstance(), [OTHER]: Object.assign(makeClassInstance(), { uuid: OTHER }) };
+    utils.instanceUtility.getClassInstance.mockImplementation(async (uuid: string) => instances[uuid]);
+  });
+
+  it("redraws the owner whose last run read the attribute, though its source never names it", async () => {
+    utils.metaUtility.getMetaClass.mockResolvedValue({ geometry: GEOMETRY_IGNORING_ATTR });
+    await recordReads(CLASS_INSTANCE_UUID, [["attrval", ATTR_UUID]]);
+
+    await vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance());
+
+    expect(redrawn()).toEqual([CLASS_INSTANCE_UUID]);
+  });
+
+  it("matches a read by attribute name", async () => {
+    utils.metaUtility.getMetaClass.mockResolvedValue({ geometry: GEOMETRY_IGNORING_ATTR });
+    await recordReads(CLASS_INSTANCE_UUID, [["attrvalByName", "label"]]);
+
+    await vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance());
+
+    expect(redrawn()).toEqual([CLASS_INSTANCE_UUID]);
+  });
+
+  it("does not redraw an owner whose last run did not read the attribute, though its source names it", async () => {
+    await recordReads(CLASS_INSTANCE_UUID, [["attrvalByName", "something else"]]);
+
+    await vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance());
+
+    expect(redrawn()).toEqual([]);
+  });
+
+  it("redraws another instance whose vizRep read the attribute", async () => {
+    await recordReads(CLASS_INSTANCE_UUID, []);
+    await recordReads(OTHER, [["attrvalByInst", ATTR_UUID, CLASS_INSTANCE_UUID]]);
+
+    await vizrepUpdateChecker.checkForVizRepUpdate(makeAttributeInstance());
+    await flush();
+
+    expect(redrawn()).toEqual([OTHER]);
+  });
+
+  it("redraws an instance that read a table when one of its cells changes", async () => {
+    const TABLE_ATTR_UUID = "78787878-7878-4787-8787-787878787878";
+    const table = AttributeInstance.fromJS({ uuid: "table-1", uuid_attribute: TABLE_ATTR_UUID, assigned_uuid_class_instance: CLASS_INSTANCE_UUID, value: "" }) as AttributeInstance;
+    const cell = AttributeInstance.fromJS({ uuid: "cell-1", uuid_attribute: "column", table_attribute_reference: "table-1", table_row: 0, value: "x" }) as AttributeInstance;
+    table.table_attributes = [cell];
+    instances[CLASS_INSTANCE_UUID].attribute_instance = [table];
+    utils.instanceUtility.getTabContextSceneInstance.mockResolvedValue({ class_instances: [instances[CLASS_INSTANCE_UUID]], relationclasses_instances: [], port_instances: [], attribute_instances: [] });
+    await recordReads(CLASS_INSTANCE_UUID, []);
+    await recordReads(OTHER, [["getTableRows", CLASS_INSTANCE_UUID, TABLE_ATTR_UUID]]);
+
+    await vizrepUpdateChecker.checkForVizRepUpdate(cell);
+    await flush();
+
+    expect(redrawn()).toEqual([OTHER]);
+  });
+
+  it("also redraws the instances that read the relations of a relation's ends", async () => {
+    const THIRD = "9a9a9a9a-9a9a-49a9-89a9-9a9a9a9a9a9a";
+    instances[THIRD] = Object.assign(makeClassInstance(), { uuid: THIRD });
+    await recordReads(THIRD, [["getOutgoingRelationsByInstanceUUID", CLASS_INSTANCE_UUID]]);
+    const relation = RelationclassInstance.fromJS({
+      uuid: "rel-1",
+      role_instance_from: { uuid: "r1", uuid_has_reference_class_instance: CLASS_INSTANCE_UUID },
+      role_instance_to: { uuid: "r2", uuid_has_reference_class_instance: OTHER },
+    }) as RelationclassInstance;
+
+    await vizrepUpdateChecker.checkForVizRepUpdateOfRelationEnds(relation);
+
+    expect(redrawn()).toEqual([CLASS_INSTANCE_UUID, OTHER, THIRD]);
+  });
+});
+
+/**
+ * Only the active tab is drawn into, and switching tabs redraws nothing by itself, so a
+ * redraw due in a background tab used to be lost for good.
+ */
+describe("redraws due in a background tab", () => {
+  const BACKGROUND = "bcbcbcbc-bcbc-4bcb-8bcb-bcbcbcbcbcbc";
+  let background: ClassInstance;
+  const redrawn = () => gcMock.graphicContext.updateVizRep.mock.calls.map((call) => ((call as unknown[])[0] as { uuid: string }).uuid);
+
+  beforeEach(() => {
+    gcMock.graphicContext.runVizRepFunction.mockImplementation(async () => {});
+    gcMock.graphicContext.updateVizRep.mockImplementation(async () => {});
+    background = Object.assign(makeClassInstance(), { uuid: BACKGROUND });
+    fakeGlobal.globalObject.tabContext = [
+      { sceneInstance: { uuid: "active-scene", class_instances: [], relationclasses_instances: [] } },
+      { sceneInstance: { uuid: "background-scene", class_instances: [background], relationclasses_instances: [] } },
+    ];
+    fakeGlobal.globalObject.selectedTab = 0;
+    // Lookups answer for the active tab only, as instance-utility's do.
+    utils.instanceUtility.getClassInstance.mockImplementation(async (uuid: string) =>
+      (fakeGlobal.globalObject.tabContext[fakeGlobal.globalObject.selectedTab].sceneInstance as { class_instances: ClassInstance[] }).class_instances.find((instance) => instance.uuid === uuid),
+    );
+  });
+
+  it("holds a redraw back until its tab is shown, then runs it once", async () => {
+    await vizrepUpdateChecker.checkForVizRepUpdateByInstance(BACKGROUND);
+    expect(redrawn()).toEqual([]);
+
+    fakeGlobal.globalObject.selectedTab = 1;
+    eventBus.publish("checkForVizRepUpdateOfActiveTab");
+    await flush();
+    await flush();
+    expect(redrawn()).toEqual([BACKGROUND]);
+
+    eventBus.publish("checkForVizRepUpdateOfActiveTab");
+    await flush();
+    expect(redrawn()).toEqual([BACKGROUND]);
+  });
+
+  it("holds back an attribute change of an instance in a background tab", async () => {
+    const attribute = AttributeInstance.fromJS({ uuid: "a-1", uuid_attribute: ATTR_UUID, assigned_uuid_class_instance: BACKGROUND, value: "v" }) as AttributeInstance;
+
+    await vizrepUpdateChecker.checkForVizRepUpdate(attribute);
+    fakeGlobal.globalObject.selectedTab = 1;
+    await vizrepUpdateChecker.checkForVizRepUpdateOfHeldBack();
+
+    expect(redrawn()).toEqual([BACKGROUND]);
+  });
+
+  it("forgets what it knows of an instance no open tab holds", async () => {
+    await recordReads("gone", [["attrval", ATTR_UUID]]);
+
+    await vizrepUpdateChecker.checkForVizRepUpdateByInstance("gone");
+
+    expect(vizRepReads.hasRecord("gone")).toBe(false);
+    expect(redrawn()).toEqual([]);
+  });
+
+  it("forgets everything when the user signs out", async () => {
+    await recordReads(BACKGROUND, [["attrval", ATTR_UUID]]);
+    await vizrepUpdateChecker.checkForVizRepUpdateByInstance(BACKGROUND);
+
+    eventBus.publish("login", false);
+    fakeGlobal.globalObject.selectedTab = 1;
+    await vizrepUpdateChecker.checkForVizRepUpdateOfHeldBack();
+
+    expect(vizRepReads.hasRecord(BACKGROUND)).toBe(false);
+    expect(vizRepReads.readers([readKeys.attribute(BACKGROUND, ATTR_UUID)]).size).toBe(0);
+    expect(redrawn()).toEqual([]);
   });
 });

@@ -349,7 +349,8 @@ so a React effect can clean up. Channel names and payload types are declared onc
 | `updateSceneGroup` | dialogs, tabActions, scene-tree-service, history-service | SceneGroup, ModelTree | the tree's data changed; re-render it |
 | `updateAttributeGui` / `removeAttributeGui` | interaction-handler, global-state-object, … | AttributeWindow | the selection changed / was cleared (published 10 ms apart) |
 | `checkForVizRepUpdate` / `…ByAttributeInstance` | attribute edits, the expression API, shared-doc-service, history-service, image upload | vizrep-update-checker (and ModelTree, for Name edits) | a value changed; redraw whatever reads it |
-| `checkForVizRepUpdateByRelationInstance` | interaction-handler (a relation finished), deletion-handler, history-service (a relation restored), shared-doc-service (a peer's relation added or deleted) | vizrep-update-checker | a relation came or went; redraw the instances at its two ends |
+| `checkForVizRepUpdateByRelationInstance` | interaction-handler (a relation finished), deletion-handler, history-service (a relation restored), shared-doc-service (a peer's relation added or deleted) | vizrep-update-checker | a relation came or went; redraw the instances at its two ends and those that read their relations |
+| `checkForVizRepUpdateOfActiveTab` | tabActions, after the scene swap | vizrep-update-checker | the shown tab can be drawn into; run the redraws held back for it |
 | `historyRecord` | engine modules, PositionPanel, useKeyboardShortcuts | history-service (PositionPanel also listens, to re-read its fields) | record an undo step |
 | `remoteSceneInstanceChanged` | shared-doc-service | history-service, ModelTree, PositionPanel | a peer changed these instances |
 | `remoteClassInstanceAdded` / `remoteRelationInstanceAdded` | shared-doc-service | persistency-handler | draw what a peer added |
@@ -541,6 +542,14 @@ reference into another scene can be followed, and `getInstanceByUUID` reads an i
 no relation leads to. AlgorithmDialog marks the scene dirty after a run, because a procedure
 writes straight onto the gds objects, which flags nothing.
 
+A few calls spare stored code from walking gds internals: `self()` (the instance being
+drawn, inside a vizRep), `attrvalByNameAndInst`, `getSourcesByInstanceUUID` /
+`getDestinationsByInstanceUUID` (the instances at the other ends of an instance's relations,
+ports included), `getTableRows` (a table's rows, cells keyed by column name and uuid) and
+`getReference` (what a reference attribute or cell points at). The metamodeling client
+carries the same calls, and its editor's autocomplete
+(`mmar-metamodeling-client/src/views/code-editor/gc-intellisense.ts`) documents them.
+
 What follows from this:
 
 - **The `graphic-context` and `expression-utility` method surfaces are an API.** Code
@@ -549,25 +558,39 @@ What follows from this:
 - **Mesh uuid = instance uuid** is how the whole app maps between three.js and gds:
   picking, write-backs, deletion, undo, collaboration. A relation's `Line2` and its end
   meshes deliberately share the relation's uuid.
+- **What a vizRep reads is recorded.** Every draw passes the instance to
+  `gc.runVizRepFunction(code, instance)`, which hands the vizRep a stand-in for
+  `gc.expression` that notes each read before passing it on
+  ([vizrep-reads.ts](src/engine/vizrep-reads.ts)): an attribute of some instance (by meta
+  uuid or by name, as the call named it; a table counts with its cells) or the relations of
+  some instance. Each run's reads replace the previous run's. The stand-in belongs to the
+  one run, so a mechanism calling the API meanwhile is not mixed in.
 - **Redraw on attribute change.**
-  [vizrep-update-checker.ts](src/engine/vizrep-update-checker.ts) re-runs an instance's
-  vizRep when one of its attributes changes, but only if the meta attribute's **name or
-  uuid appears as a substring** of the vizRep source. A table cell counts as an attribute
-  of the instance owning its table: a cell names only its table
-  (`table_attribute_reference`), so the checker walks up through the tables to the owner
-  ([scene-walk.ts](src/resources/util/scene-walk.ts)), and the cell's column or any table
-  around it may be the name that matches. Before the re-run it drops the
+  [vizrep-update-checker.ts](src/engine/vizrep-update-checker.ts) redraws every instance
+  whose last run **read** the changed attribute, the owner and any other instance
+  (`attrvalByInst`, `getTableRows`, …). A table cell counts as part of the table its owner
+  holds: a cell names only its table (`table_attribute_reference`), so the checker walks
+  up through the tables to the owner ([scene-walk.ts](src/resources/util/scene-walk.ts)).
+  An owner with no record — no tracked draw ran for it, as for a scene type's vizRep or a
+  URDF mesh — falls back to the old rule: redraw if the meta attribute's **name or uuid
+  appears as a substring** of its vizRep source. Before a re-run the checker drops the
   custom variables that are not `user_locked`, so computed values get recomputed while a
   label the user dragged by hand (which `transform-control-events` marks locked) stays
   where it was put. Afterwards it sets `objectScaled`, because a redraw can change the
   outline that relations end on.
 - **Redraw on relation change.** Adding or removing a relation changes no attribute of
   the instances it connects, so it has its own channel,
-  `checkForVizRepUpdateByRelationInstance`: both ends are redrawn, unconditionally, so a
-  vizRep that walks its relations stays current. Requests for an instance whose redraw is
-  already queued join it, which keeps a delete cascade to one redraw per neighbour. A port
-  end is drawn as the port (`current_port_instance` set, `current_class_instance` not), so
-  it reads its own attributes.
+  `checkForVizRepUpdateByRelationInstance`: both ends are redrawn, unconditionally, and so
+  is every instance whose last run read the relations of either end. Requests for an
+  instance whose redraw is already queued join it, which keeps a delete cascade to one
+  redraw per neighbour.
+- **Ports read their own attributes.** The expression API looks in
+  `current_class_instance` before `current_port_instance`, so every draw of a port —
+  first draw, palette drop, redraw — leaves the class pointer unset while it runs.
+- **Background tabs catch up when shown.** Only the active tab is drawn into, and a tab
+  switch redraws nothing by itself. A redraw due in a scene open in another tab is held
+  back per scene and run when `tabActions` publishes `checkForVizRepUpdateOfActiveTab`
+  after the scene swap; one for an instance no open tab holds is dropped with its record.
 - **Some metamodels have behaviour outside the vizRep pipeline**, the *hybrid
   algorithms* in [engine/hybrid-algorithms/](src/engine/hybrid-algorithms/):
   - Robotic system: a zipped URDF (File ▸ Map file to SceneInstance) becomes Link and
@@ -1207,11 +1230,12 @@ strings, capped at 50 per scene.
   `views/layout/tabActions.ts`), which strands a session when a lower tab is closed.
 - **The `graphic-context` and `expression-utility` method surfaces are an API** for code
   stored in the database. Keep unused methods, and keep their parameters in order.
-- **VizRep refreshes key on substrings.** An attribute redraws its instance only if its
-  meta name or uuid appears in the vizRep source, so renaming an attribute in the
-  metamodel can silently stop the redraw. A vizRep that reads ANOTHER instance's values
-  (`attrvalByInst`) is not redrawn when those change; only relation changes and the
-  instance's own attributes (table cells included) are followed.
+- **VizRep refreshes follow recorded reads.** A read that does not go through a
+  `gc.expression` call is invisible to them: fields of an instance object a vizRep was
+  handed (its `name`, say), and which instances of a class exist
+  (`getClassInstancesByMetaUUID` is not recorded). An instance with no record falls back
+  to matching the attribute's name or uuid in its vizRep source, where renaming an
+  attribute in the metamodel can silently stop the redraw.
 - **The mode names and the log statuses are strings with meaning**: mode names are
   compared, and statuses are icon names.
 - **Rename through the tab or tree context menu.** The SaveAs dialog's Name field
@@ -1261,9 +1285,9 @@ Scripts: `npm run dev` (port 8085), `build` (`tsc --noEmit && vite build`), `tes
 
 ## Tests
 
-`npm run test` runs 82 files; 7 of them are `*.integration.test.ts`, which need
+`npm run test` runs 84 files; 7 of them are `*.integration.test.ts`, which need
 `mmar-server` and `mmar-sync-server` reachable and write to that server. Without them,
-`npx vitest run --exclude "**/*.integration.test.ts"` → **800 tests across 75 files, all
+`npx vitest run --exclude "**/*.integration.test.ts"` → **829 tests across 77 files, all
 green** (5 November 2026). Vitest defaults to the `node`
 environment; component suites opt into jsdom per file with a
 `// @vitest-environment jsdom` docblock. [src/test-setup.ts](src/test-setup.ts) imports `reflect-metadata` first
@@ -1288,7 +1312,7 @@ The suites worth reading before you change something:
 | teardown | [session-reset.test.ts](src/resources/services/session-reset.test.ts) (11) |
 | saving and validation | [persistency-handler.test.ts](src/resources/services/persistency-handler.test.ts) (12), [metamodel-constraints.test.ts](src/resources/services/metamodel-constraints.test.ts) (10) |
 | deletion cascade | [deletion-handler.test.ts](src/engine/deletion-handler.test.ts) (12) |
-| vizRep refresh and the lane | [vizrep-update-checker.test.ts](src/engine/vizrep-update-checker.test.ts) (30), [draw-lock.test.ts](src/resources/services/draw-lock.test.ts) (4) |
+| vizRep refresh and the lane | [vizrep-update-checker.test.ts](src/engine/vizrep-update-checker.test.ts) (40), [vizrep-reads.test.ts](src/engine/vizrep-reads.test.ts) (7), [draw-lock.test.ts](src/resources/services/draw-lock.test.ts) (4) |
 | attribute window | [attributeModel.test.ts](src/views/attribute-window/attributeModel.test.ts) (22), [AttributeWindow.test.tsx](src/views/attribute-window/AttributeWindow.test.tsx) (19) |
 
 Many of these exist because the rule they pin was a bug first.

@@ -16,6 +16,7 @@ import { metaUtility } from "@/resources/services/meta-utility";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { logger } from "@/resources/services/logger";
 import { expressionUtility } from "@/resources/services/expression-utility";
+import { vizRepReads } from "@/engine/vizrep-reads";
 
 /**
  * The `gc` object every meta object's `vizRep(gc)` code string is evaluated against
@@ -1116,11 +1117,32 @@ export class GraphicContext {
 
   /**
    * Runs the vizRep function with the provided vizRep code.
-   * @param vizRepCode The mechanism code to be executed.
+   *
+   * Given the instance being drawn, the run is tracked: the vizRep reads the model through
+   * a stand-in for `expression` that records what it read (see vizrep-reads), which is
+   * what decides later whether a change redraws this instance. Every draw of an instance
+   * passes it; without one, the run is simply not tracked.
+   *
+   * @param vizRepCode The vizRep code to be executed.
+   * @param instance The instance being drawn.
    */
-  async runVizRepFunction(vizRepCode: string) {
+  async runVizRepFunction(vizRepCode: string, instance?: ObjectInstance) {
     const vizRepFunction = await this.metaUtility.parseMetaFunction(vizRepCode);
-    await vizRepFunction(this);
+    if (!instance) {
+      await vizRepFunction(this);
+      return;
+    }
+
+    const run = vizRepReads.tracking(expressionUtility, instance);
+    this.expression = run.expression;
+    try {
+      await vizRepFunction(this);
+    } finally {
+      // Back to the plain API, not to whatever was installed before: two runs that
+      // overlapped on this context could otherwise leave a finished run's stand-in in place.
+      this.expression = expressionUtility;
+      run.done();
+    }
   }
 }
 

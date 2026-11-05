@@ -36,6 +36,14 @@ export function attributesOf(scene: SceneInstance): AttributeInstance[] {
   ];
 }
 
+/** Whether `scene` holds a class, relation or port instance with this uuid. */
+export function sceneHolds(scene: SceneInstance, instanceUuid: UUID): boolean {
+  const classes = [...(scene.class_instances ?? []), ...(scene.relationclasses_instances ?? [])];
+  if (classes.some((instance) => instance.uuid === instanceUuid)) return true;
+  const ports = [...(scene.port_instances ?? []), ...classes.flatMap((instance) => instance.port_instance ?? [])];
+  return ports.some((port) => port.uuid === instanceUuid);
+}
+
 /**
  * The tables a table cell sits in, innermost first: its own table, then the table that
  * one is a cell of, and so on up to the table an instance owns. A cell records only the

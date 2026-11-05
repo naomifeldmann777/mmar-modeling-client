@@ -1,10 +1,11 @@
-import { AttributeInstance, ClassInstance, RelationclassInstance, UUID } from "@gds";
+import { AttributeInstance, ClassInstance, ObjectInstance, RelationclassInstance, UUID } from "@gds";
 import { globalObject } from "@/engine/global-definition";
 import { instanceUtility } from "./instance-utility";
 import { eventBus } from "./event-bus";
 import { metaUtility } from "./meta-utility";
 import { fileUtility } from "./file-utility";
 import { logger } from "./logger";
+import { referenceTarget } from "@/resources/util/scene-walk";
 
 /** How long a redraw request waits on an in-flight update before going ahead anyway. */
 const CLAIM_VIZREP_TIMEOUT_MS = 2000;
@@ -236,6 +237,113 @@ export class ExpressionUtility {
     const incomingRelations = await this.instanceUtility.getIncomingRelationsFromInstance(instanceUUID);
     const outgoingRelations = await this.instanceUtility.getOutgoingRelationsFromInstance(instanceUUID);
     return incomingRelations.length > 0 && outgoingRelations.length > 0;
+  }
+
+  /**
+   * The instance whose vizRep is running: the class, relation or port instance being
+   * drawn. Undefined outside a vizRep — a mechanism or a simulation is handed its
+   * instance as its second argument instead.
+   *
+   * Answered by the stand-in a tracked vizRep run reads through (see vizrep-reads); this
+   * is what any other caller gets.
+   */
+  async self(): Promise<ObjectInstance | undefined> {
+    return undefined;
+  }
+
+  /**
+   * The value of an attribute of any instance, by the name of its meta attribute — what
+   * `attrvalByName` is for the instance being drawn.
+   *
+   * @param {string} attrName - The name of the meta attribute.
+   * @param {string} instUUID - The UUID of any type of instance.
+   */
+  async attrvalByNameAndInst(attrName: string, instUUID: string): Promise<string | undefined> {
+    const attributeInstance = await this.instanceUtility.getAttributeInstanceFromAnyInstance(attrName, instUUID, "name");
+    return attributeInstance?.value;
+  }
+
+  /**
+   * The instances at the far ends of the relations that END at the given instance, in the
+   * order of the relations: its sources. Each is listed once, and may be a class,
+   * relation or port instance. Optionally only relations of the given relation classes.
+   *
+   * @param {string} instanceUUID - The UUID of any type of instance.
+   * @param {string|string[]|null} [relationClassUUIDs] - The relation class(es) to follow.
+   */
+  async getSourcesByInstanceUUID(instanceUUID: string, relationClassUUIDs: string | string[] | null = null): Promise<ObjectInstance[]> {
+    return this.relatedInstances(instanceUUID, relationClassUUIDs, "to");
+  }
+
+  /**
+   * The instances at the far ends of the relations that START at the given instance, in
+   * the order of the relations: its destinations. Each is listed once, and may be a class,
+   * relation or port instance. Optionally only relations of the given relation classes.
+   *
+   * @param {string} instanceUUID - The UUID of any type of instance.
+   * @param {string|string[]|null} [relationClassUUIDs] - The relation class(es) to follow.
+   */
+  async getDestinationsByInstanceUUID(instanceUUID: string, relationClassUUIDs: string | string[] | null = null): Promise<ObjectInstance[]> {
+    return this.relatedInstances(instanceUUID, relationClassUUIDs, "from");
+  }
+
+  /**
+   * @param end Which end of a relation `instanceUUID` is on: "from" collects the
+   * instances at the "to" ends, and the other way round.
+   */
+  private async relatedInstances(instanceUUID: UUID, relationClassUUIDs: string | string[] | null, end: "from" | "to"): Promise<ObjectInstance[]> {
+    const relationClasses = relationClassUUIDs == null ? null : new Set(([] as string[]).concat(relationClassUUIDs));
+    const related: ObjectInstance[] = [];
+    const seen = new Set<UUID>();
+    for (const relation of await this.instanceUtility.getAllRelationClassInstances()) {
+      if (relationClasses && !relationClasses.has(relation.uuid_relationclass)) continue;
+      const [near, far] = end === "from" ? [relation.role_instance_from, relation.role_instance_to] : [relation.role_instance_to, relation.role_instance_from];
+      if (referenceTarget(near) !== instanceUUID) continue;
+      const farUUID = referenceTarget(far);
+      if (!farUUID || seen.has(farUUID)) continue;
+      const instance = await this.instanceUtility.getAnyInstance(farUUID);
+      if (!instance) continue;
+      seen.add(farUUID);
+      related.push(instance as ObjectInstance);
+    }
+    return related;
+  }
+
+  /**
+   * The rows of a table attribute of any instance, top to bottom. A row maps each of its
+   * cells under the name of the cell's meta attribute (the column) and under that meta
+   * attribute's UUID, so `row.Product.value` and `row["<uuid>"].value` read the same
+   * cell; a column the row has no cell for is missing. A cell holding a reference is
+   * resolved with `getReference`. Empty when the instance has no such attribute.
+   *
+   * @param {string} instanceUUID - The UUID of any type of instance.
+   * @param {string} tableAttrUUID - The UUID of the table's meta attribute.
+   */
+  async getTableRows(instanceUUID: string, tableAttrUUID: string): Promise<Record<string, AttributeInstance>[]> {
+    const table = await this.findAttributeInstance(instanceUUID, tableAttrUUID);
+    const rows: Record<string, AttributeInstance>[] = [];
+    for (const cell of table?.table_attributes ?? []) {
+      if (!Number.isInteger(cell.table_row) || cell.table_row < 0) continue;
+      while (rows.length <= cell.table_row) rows.push({});
+      if (cell.name) rows[cell.table_row][cell.name] = cell;
+      rows[cell.table_row][cell.uuid_attribute] = cell;
+    }
+    return rows;
+  }
+
+  /**
+   * The instance a reference attribute — or a cell of a reference column — points at:
+   * a class, relation, port, scene or attribute instance. Undefined when it holds no
+   * reference, or when the instance is not in the local client; a reference into a scene
+   * not loaded yet resolves after `loadAllSceneInstances`. The attribute's own value
+   * keeps the target's name as it was when the reference was set.
+   *
+   * @param {AttributeInstance} attributeInstance - The reference attribute or cell.
+   */
+  async getReference(attributeInstance: AttributeInstance): Promise<ObjectInstance | undefined> {
+    const target = referenceTarget(attributeInstance?.role_instance_from);
+    if (!target) return undefined;
+    return ((await this.instanceUtility.getAnyInstance(target)) ?? undefined) as ObjectInstance | undefined;
   }
 
   /**

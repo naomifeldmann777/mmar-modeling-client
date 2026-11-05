@@ -60,6 +60,10 @@ async function applyEngineTabSelection(index: number): Promise<void> {
   globalObject.scene.add(globalObject.mousePointer3d);
   await sceneInitiator.initTransformControls();
   globalObject.scene.add(globalObject.plane);
+
+  // Only now is the tab's scene the one drawn into: catch up on the redraws held back
+  // while it was in the background (`tabChanged` above fires before the swap).
+  eventBus.publish("checkForVizRepUpdateOfActiveTab");
 }
 
 /** Activate the tab at `index` (clickedTab): engine scene swap + store selection. */

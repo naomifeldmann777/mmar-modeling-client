@@ -141,3 +141,95 @@ describe("ExpressionUtility — calls for procedures", () => {
     expect(await expressionUtility.getInstanceByUUID("gone")).toBeNull();
   });
 });
+
+describe("ExpressionUtility — helpers for reading related instances and tables", () => {
+  beforeEach(() => {
+    const scene = mocks.globalObject.tabContext[0].sceneInstance as SceneInstance;
+    const revived = SceneInstance.fromJS({
+      uuid: "extra",
+      uuid_scene_type: "st-1",
+      class_instances: [
+        { uuid: "C", uuid_class: "metaA", attribute_instance: [], port_instance: [] },
+        { uuid: "D", uuid_class: "metaB", attribute_instance: [], port_instance: [{ uuid: "P", uuid_port: "metaP", attribute_instances: [] }] },
+      ],
+      relationclasses_instances: [
+        // A to a port of D, through another relation class
+        { uuid: "R2", uuid_relationclass: "metaR2", attribute_instance: [], line_points: [], role_instance_from: { uuid: "r2f", uuid_has_reference_class_instance: "A" }, role_instance_to: { uuid: "r2t", uuid_has_reference_port_instance: "P" } },
+        // a second relation from C to B, and one still being drawn from C
+        { uuid: "R3", uuid_relationclass: "metaR", attribute_instance: [], line_points: [], role_instance_from: { uuid: "r3f", uuid_has_reference_class_instance: "C" }, role_instance_to: { uuid: "r3t", uuid_has_reference_class_instance: "B" } },
+        { uuid: "R4", uuid_relationclass: "metaR", attribute_instance: [], line_points: [], role_instance_from: { uuid: "r4f", uuid_has_reference_class_instance: "C" } },
+      ],
+      port_instances: [],
+      attribute_instances: [],
+    }) as SceneInstance;
+    scene.class_instances.push(...revived.class_instances);
+    scene.relationclasses_instances.push(...revived.relationclasses_instances);
+
+    scene.class_instances[0].attribute_instance.push(
+      ...(SceneInstance.fromJS({
+        uuid: "tmp",
+        class_instances: [
+          {
+            uuid: "tmp-class",
+            attribute_instance: [
+              {
+                uuid: "table",
+                uuid_attribute: "meta-table",
+                name: "Steps",
+                value: "",
+                assigned_uuid_class_instance: "A",
+                table_attributes: [
+                  { uuid: "c00", uuid_attribute: "col-product", name: "Product", table_row: 0, table_attribute_reference: "table", value: "name of B", role_instance_from: { uuid: "ref", uuid_has_reference_class_instance: "B" } },
+                  { uuid: "c01", uuid_attribute: "col-note", name: "Note", table_row: 0, table_attribute_reference: "table", value: "first" },
+                  { uuid: "c11", uuid_attribute: "col-note", name: "Note", table_row: 1, table_attribute_reference: "table", value: "second" },
+                ],
+              },
+            ],
+          },
+        ],
+      }) as SceneInstance).class_instances[0].attribute_instance,
+    );
+  });
+
+  const uuids = (instances: { uuid: string }[]) => instances.map((instance) => instance.uuid);
+
+  it("getDestinationsByInstanceUUID lists what an instance's relations lead to, ports included", async () => {
+    expect(uuids(await expressionUtility.getDestinationsByInstanceUUID("A"))).toEqual(["B", "P"]);
+    expect(uuids(await expressionUtility.getDestinationsByInstanceUUID("A", "metaR"))).toEqual(["B"]);
+    expect(uuids(await expressionUtility.getDestinationsByInstanceUUID("A", ["metaR2"]))).toEqual(["P"]);
+  });
+
+  it("getSourcesByInstanceUUID lists where the relations ending at an instance start, each once", async () => {
+    expect(uuids(await expressionUtility.getSourcesByInstanceUUID("B"))).toEqual(["A", "C"]);
+    expect(uuids(await expressionUtility.getSourcesByInstanceUUID("P"))).toEqual(["A"]);
+    // R4 is still being drawn: it has no "to" end, so it leads nowhere.
+    expect(uuids(await expressionUtility.getDestinationsByInstanceUUID("C"))).toEqual(["B"]);
+  });
+
+  it("getTableRows reads the rows of a table, each cell under its column's name and uuid", async () => {
+    const rows = await expressionUtility.getTableRows("A", "meta-table");
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0].Product.value).toBe("name of B");
+    expect(rows[0]["col-product"]).toBe(rows[0].Product);
+    expect(rows[1].Note.value).toBe("second");
+    expect(rows[1].Product).toBeUndefined();
+    expect(await expressionUtility.getTableRows("A", "no-such-attribute")).toEqual([]);
+  });
+
+  it("getReference resolves what a reference cell points at", async () => {
+    const [row] = await expressionUtility.getTableRows("A", "meta-table");
+
+    expect((await expressionUtility.getReference(row.Product))?.uuid).toBe("B");
+    expect(await expressionUtility.getReference(row.Note)).toBeUndefined();
+  });
+
+  it("attrvalByNameAndInst reads another instance's attribute by name", async () => {
+    expect(await expressionUtility.attrvalByNameAndInst("label", "A")).toBe("hello");
+    expect(await expressionUtility.attrvalByNameAndInst("no such name", "A")).toBeUndefined();
+  });
+
+  it("self is undefined outside a vizRep", async () => {
+    expect(await expressionUtility.self()).toBeUndefined();
+  });
+});
