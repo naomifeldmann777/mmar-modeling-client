@@ -349,6 +349,7 @@ so a React effect can clean up. Channel names and payload types are declared onc
 | `updateSceneGroup` | dialogs, tabActions, scene-tree-service, history-service | SceneGroup, ModelTree | the tree's data changed; re-render it |
 | `updateAttributeGui` / `removeAttributeGui` | interaction-handler, global-state-object, … | AttributeWindow | the selection changed / was cleared (published 10 ms apart) |
 | `checkForVizRepUpdate` / `…ByAttributeInstance` | attribute edits, the expression API, shared-doc-service, history-service, image upload | vizrep-update-checker (and ModelTree, for Name edits) | a value changed; redraw whatever reads it |
+| `checkForVizRepUpdateByRelationInstance` | interaction-handler (a relation finished), deletion-handler, history-service (a relation restored), shared-doc-service (a peer's relation added or deleted) | vizrep-update-checker | a relation came or went; redraw the instances at its two ends |
 | `historyRecord` | engine modules, PositionPanel, useKeyboardShortcuts | history-service (PositionPanel also listens, to re-read its fields) | record an undo step |
 | `remoteSceneInstanceChanged` | shared-doc-service | history-service, ModelTree, PositionPanel | a peer changed these instances |
 | `remoteClassInstanceAdded` / `remoteRelationInstanceAdded` | shared-doc-service | persistency-handler | draw what a peer added |
@@ -551,11 +552,22 @@ What follows from this:
 - **Redraw on attribute change.**
   [vizrep-update-checker.ts](src/engine/vizrep-update-checker.ts) re-runs an instance's
   vizRep when one of its attributes changes, but only if the meta attribute's **name or
-  uuid appears as a substring** of the vizRep source. Before the re-run it drops the
+  uuid appears as a substring** of the vizRep source. A table cell counts as an attribute
+  of the instance owning its table: a cell names only its table
+  (`table_attribute_reference`), so the checker walks up through the tables to the owner
+  ([scene-walk.ts](src/resources/util/scene-walk.ts)), and the cell's column or any table
+  around it may be the name that matches. Before the re-run it drops the
   custom variables that are not `user_locked`, so computed values get recomputed while a
   label the user dragged by hand (which `transform-control-events` marks locked) stays
   where it was put. Afterwards it sets `objectScaled`, because a redraw can change the
   outline that relations end on.
+- **Redraw on relation change.** Adding or removing a relation changes no attribute of
+  the instances it connects, so it has its own channel,
+  `checkForVizRepUpdateByRelationInstance`: both ends are redrawn, unconditionally, so a
+  vizRep that walks its relations stays current. Requests for an instance whose redraw is
+  already queued join it, which keeps a delete cascade to one redraw per neighbour. A port
+  end is drawn as the port (`current_port_instance` set, `current_class_instance` not), so
+  it reads its own attributes.
 - **Some metamodels have behaviour outside the vizRep pipeline**, the *hybrid
   algorithms* in [engine/hybrid-algorithms/](src/engine/hybrid-algorithms/):
   - Robotic system: a zipped URDF (File ▸ Map file to SceneInstance) becomes Link and
@@ -1197,7 +1209,9 @@ strings, capped at 50 per scene.
   stored in the database. Keep unused methods, and keep their parameters in order.
 - **VizRep refreshes key on substrings.** An attribute redraws its instance only if its
   meta name or uuid appears in the vizRep source, so renaming an attribute in the
-  metamodel can silently stop the redraw.
+  metamodel can silently stop the redraw. A vizRep that reads ANOTHER instance's values
+  (`attrvalByInst`) is not redrawn when those change; only relation changes and the
+  instance's own attributes (table cells included) are followed.
 - **The mode names and the log statuses are strings with meaning**: mode names are
   compared, and statuses are icon names.
 - **Rename through the tab or tree context menu.** The SaveAs dialog's Name field
@@ -1247,10 +1261,10 @@ Scripts: `npm run dev` (port 8085), `build` (`tsc --noEmit && vite build`), `tes
 
 ## Tests
 
-`npm run test` runs 80 files; 7 of them are `*.integration.test.ts`, which need
+`npm run test` runs 82 files; 7 of them are `*.integration.test.ts`, which need
 `mmar-server` and `mmar-sync-server` reachable and write to that server. Without them,
-`npx vitest run --exclude "**/*.integration.test.ts"` → **727 tests across 73 files, all
-green** (3 November 2026). Vitest defaults to the `node`
+`npx vitest run --exclude "**/*.integration.test.ts"` → **800 tests across 75 files, all
+green** (5 November 2026). Vitest defaults to the `node`
 environment; component suites opt into jsdom per file with a
 `// @vitest-environment jsdom` docblock. [src/test-setup.ts](src/test-setup.ts) imports `reflect-metadata` first
 (mirroring `main.tsx`) and polyfills `Blob.text()` / `arrayBuffer()`, which jsdom lacks.
@@ -1274,7 +1288,7 @@ The suites worth reading before you change something:
 | teardown | [session-reset.test.ts](src/resources/services/session-reset.test.ts) (11) |
 | saving and validation | [persistency-handler.test.ts](src/resources/services/persistency-handler.test.ts) (12), [metamodel-constraints.test.ts](src/resources/services/metamodel-constraints.test.ts) (10) |
 | deletion cascade | [deletion-handler.test.ts](src/engine/deletion-handler.test.ts) (12) |
-| vizRep refresh and the lane | [vizrep-update-checker.test.ts](src/engine/vizrep-update-checker.test.ts) (16), [draw-lock.test.ts](src/resources/services/draw-lock.test.ts) (4) |
+| vizRep refresh and the lane | [vizrep-update-checker.test.ts](src/engine/vizrep-update-checker.test.ts) (30), [draw-lock.test.ts](src/resources/services/draw-lock.test.ts) (4) |
 | attribute window | [attributeModel.test.ts](src/views/attribute-window/attributeModel.test.ts) (22), [AttributeWindow.test.tsx](src/views/attribute-window/AttributeWindow.test.tsx) (19) |
 
 Many of these exist because the rule they pin was a bug first.

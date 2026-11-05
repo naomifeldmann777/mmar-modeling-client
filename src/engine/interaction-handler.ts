@@ -654,6 +654,9 @@ import { runExclusive } from "@/resources/services/draw-lock";
       // Propagate the fully-formed relation class instance (both roles set) to peers.
       publishLocalChange({ type: "add_relation_class_instance", relationClassInstance: relationclass_instance });
 
+      // The two instances it connects may draw from their relations.
+      this.eventAggregator.publish("checkForVizRepUpdateByRelationInstance", relationclass_instance);
+
       // ONE undo step for the whole line, bendpoints included. The bendpoints created
       // while drawing are intermediate states of this single action, so they are not
       // recorded as they happen — the relation is only real once both roles are set,

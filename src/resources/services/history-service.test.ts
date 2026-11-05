@@ -5,7 +5,7 @@
 // actual record -> diff -> apply -> broadcast path. gds objects are revived through
 // `X.fromJS` (the P3 class-transformer rule) so `instanceof` survives an in-place undo.
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { AttributeInstance, ClassInstance, SceneInstance, remove_table_row } from "@gds";
+import { AttributeInstance, ClassInstance, RelationclassInstance, SceneInstance, remove_table_row } from "@gds";
 
 const mocks = vi.hoisted(() => ({
   globalObject: {
@@ -371,6 +371,40 @@ describe("undo and redo", () => {
     expect(mocks.globalObject.attribute_instances).toContainEqual(
       expect.objectContaining({ uuid: "attr-gone" }),
     );
+  });
+
+  // A vizRep that draws from its relations has to see a relation the undo brought back.
+  // The classes are drawn before the relations return, so it is asked for afterwards.
+  it("undoes the deletion of a relation, then has the ends it connects redrawn", async () => {
+    const scene = openScene([makeClassInstance("a"), makeClassInstance("b")]);
+    scene.relationclasses_instances.push(
+      RelationclassInstance.fromJS({
+        uuid: "rel",
+        name: "R",
+        uuid_relationclass: "meta-rel",
+        custom_variables: {},
+        attribute_instance: [],
+        line_points: [],
+        role_instance_from: { uuid: "role-from", uuid_has_reference_class_instance: "a" },
+        role_instance_to: { uuid: "role-to", uuid_has_reference_class_instance: "b" },
+      }) as unknown as RelationclassInstance,
+    );
+    historyService.record("create R");
+    scene.relationclasses_instances.splice(0, 1);
+    historyService.record("delete R");
+
+    const asked: { uuid: string; inScene: boolean; drawn: boolean }[] = [];
+    const sub = eventBus.subscribe("checkForVizRepUpdateByRelationInstance", (relation) =>
+      asked.push({
+        uuid: relation.uuid,
+        inScene: scene.relationclasses_instances.includes(relation),
+        drawn: mocks.persistencyHandler.checkIfRelationclassinstanceInScene.mock.calls.length > 0,
+      }),
+    );
+    await historyService.undo();
+    sub.dispose();
+
+    expect(asked).toEqual([{ uuid: "rel", inScene: true, drawn: true }]);
   });
 
   it("flags the reverted scene for the next auto-save", async () => {

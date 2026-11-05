@@ -562,6 +562,39 @@ describe("applyYDocRelationChangeToSceneInstance", () => {
     // Only the deleted relation's roles go; the unrelated one survives.
     expect(globalObjectInstance.role_instances.map((r) => r.uuid)).toEqual(["other"]);
   });
+
+  // The observer has the instances at a changed relation's ends redrawn from these.
+  it("reports a relation a peer added or deleted, with the ends it connects", () => {
+    const reported: RelationclassInstance[] = [];
+    relayAndApply(ydoc, docB, "relationclasses_instances", (event) => {
+      reported.push(...applyTo(event).relationsAddedOrRemoved);
+    });
+
+    const newRi = RelationclassInstance.fromJS(relationInstanceJson({ uuid: "ri-remote" })) as RelationclassInstance;
+    applyLocalChangeToYDoc(ydoc, { type: "add_relation_class_instance", relationClassInstance: newRi }, {});
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(ydoc));
+    applyLocalChangeToYDoc(ydoc, { type: "remove_relation_class_instance", relationClassInstanceUuid: RI_UUID }, {});
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(ydoc));
+
+    expect(reported.map((relation) => relation.uuid)).toEqual(["ri-remote", RI_UUID]);
+    // The deleted one as it was, so its ends can still be read off its roles.
+    expect(reported[1].role_instance_from.uuid_has_reference_class_instance).toBe(CI_UUID);
+  });
+
+  it("reports nothing for a change inside a relation", () => {
+    const reported: RelationclassInstance[] = [];
+    relayAndApply(ydoc, docB, "relationclasses_instances", (event) => {
+      reported.push(...applyTo(event).relationsAddedOrRemoved);
+    });
+    applyLocalChangeToYDoc(
+      ydoc,
+      { type: "relation_attribute_value", relationClassInstanceUuid: RI_UUID, attributeUuid: "rel-attr-1", value: "remote rel" },
+      {},
+    );
+    Y.applyUpdate(docB, Y.encodeStateAsUpdate(ydoc));
+
+    expect(reported).toEqual([]);
+  });
 });
 
 describe("applyYDocSceneAttributeChangeToSceneInstance", () => {

@@ -35,6 +35,11 @@ interface custom_object {
   [key: string]: any;
 }
 
+/** A coordinate a vizRep passed, or 0 when it passed none (or something that is not a number). */
+function finiteOr0(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 export class GraphicContext {
   private globalObjectInstance = globalObject;
   private metaUtility = metaUtility;
@@ -74,12 +79,17 @@ export class GraphicContext {
    * Apply an optional texture to a material. `map` is a data-URL produced by a vizRep
    * code string, which is why the guard also rejects the literal "undefined" such a
    * string can build. The base colour goes to white so the texture is not tinted.
+   *
+   * An image's pixels are sRGB. A texture not marked as such is taken as linear and
+   * brightened again on the way to the screen, which washed every image out; marked,
+   * it shows the colours of the image, matching a `color` given as a string.
    */
   private applyTextureMap(material: THREE.MeshBasicMaterial, map: string | undefined, options?: { alphaTest?: number }): void {
     if (!map || map == "undefined") return;
 
     const image = new Image();
     const texture = new THREE.Texture(image);
+    texture.colorSpace = THREE.SRGBColorSpace;
     image.onload = () => {
       texture.needsUpdate = true;
     };
@@ -338,6 +348,9 @@ export class GraphicContext {
 
     // Update the rendering:
     textMesh.sync();
+
+    // Where the label goes when no stored variables position it (attachText).
+    textMesh.userData.offset = { x: finiteOr0(x_rel), y: finiteOr0(y_rel), z: finiteOr0(z_rel) };
 
     textMesh.userData.custom_variables = {};
     if (pos_name_x && pos_name_y && pos_name_z) {
@@ -783,10 +796,13 @@ export class GraphicContext {
     const rel_y = keys.find((key) => key.includes("rel") && key.includes("y"));
     const rel_z = keys.find((key) => key.includes("rel") && key.includes("z"));
 
-    //if rel_x, rel_y, rel_z are found, set position to value of rel_x, rel_y, rel_z
-    textObject.position.x = rel_x ? textObject.userData.custom_variables[rel_x].value : 0;
-    textObject.position.y = rel_y ? textObject.userData.custom_variables[rel_y].value : 0;
-    textObject.position.z = rel_z ? textObject.userData.custom_variables[rel_z].value : 0;
+    //if rel_x, rel_y, rel_z are found, set position to value of rel_x, rel_y, rel_z.
+    //otherwise the label goes where its vizRep placed it: graphic_text's x_rel, y_rel and
+    //z_rel, which used to be dropped whenever no variable names came with them.
+    const offset = textObject.userData.offset ?? { x: 0, y: 0, z: 0 };
+    textObject.position.x = rel_x ? textObject.userData.custom_variables[rel_x].value : offset.x;
+    textObject.position.y = rel_y ? textObject.userData.custom_variables[rel_y].value : offset.y;
+    textObject.position.z = rel_z ? textObject.userData.custom_variables[rel_z].value : offset.z;
 
     //else if rotation delivered by vizRep, set rotation
     if (

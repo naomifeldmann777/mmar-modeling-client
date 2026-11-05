@@ -34,6 +34,10 @@ const rayOrigin = new THREE.Vector3();
 const rayDirection = new THREE.Vector3();
 const targetSphere = new THREE.Sphere();
 const rayHits: THREE.Intersection[] = [];
+const targetBox = new THREE.Box3();
+const localRay = new THREE.Ray();
+const worldToLocal = new THREE.Matrix4();
+const boxEntry = new THREE.Vector3();
 /** The materials the running cast forced double-sided, mapped to the side each had. */
 const forcedSides = new Map<THREE.Material, THREE.Side>();
 
@@ -49,6 +53,24 @@ function forceDoubleSidedMaterials(object: THREE.Object3D) {
   const material = (object as THREE.Mesh).material;
   if (Array.isArray(material)) material.forEach(forceDoubleSided);
   else if (material) forceDoubleSided(material);
+}
+
+/**
+ * Where the ray (`rayOrigin` along `rayDirection`, in world space) enters the bounding
+ * box of `object`'s own geometry, in world space; undefined when it misses the box. The
+ * box is taken in the object's local space, so it turns with the object, and padded a
+ * hair so a flat geometry (a plane has no depth) still has a box to enter.
+ */
+function boundingBoxEntry(object: THREE.Mesh): THREE.Vector3 | undefined {
+  const geometry = object.geometry;
+  if (!geometry?.getAttribute("position")) return undefined;
+  if (!geometry.boundingBox) geometry.computeBoundingBox();
+  targetBox.copy(geometry.boundingBox!).expandByScalar(1e-6);
+
+  worldToLocal.copy(object.matrixWorld).invert();
+  localRay.set(rayOrigin, rayDirection).applyMatrix4(worldToLocal);
+  if (!localRay.intersectBox(targetBox, boxEntry)) return undefined;
+  return boxEntry.applyMatrix4(object.matrixWorld);
 }
 
 export class RayHelper {
@@ -190,8 +212,11 @@ export class RayHelper {
    * raycaster on the wall nearest the incoming ray, so the endpoint would otherwise land
    * on the far wall or, with nothing hit at all, at the centre — the line then reads as
    * coming out of the middle of the object instead of off its edge. When the cast still
-   * finds nothing the near point of the bounding sphere (facing `fromObject`) is used, so
-   * the line meets the object's silhouette rather than its centre. A material the target
+   * finds nothing (a ray running along a flat part slips past it) the line ends where it
+   * enters the object's bounds, so it meets the object's outline rather than its centre:
+   * the later of its entries into the bounding box and the bounding sphere, the tighter
+   * of the two along that line. The sphere alone left a gap beside a long flat object,
+   * whose sphere reaches far past its sides. A material the target
    * uses more than once (a merged vizRep's material array repeats shared ones) is forced
    * and restored exactly once, so the cast cannot leave it double-sided.
    */
@@ -239,11 +264,26 @@ export class RayHelper {
       forcedSides.clear();
     }
 
-    // No intersection: the point where the line meets the object's silhouette. Either way
+    // No intersection: the point where the line meets the object's outline. Either way
     // a fresh vector — the caller holds on to it past the next cast.
-    const point = rayHits[0]?.point ?? targetCentre.clone().addScaledVector(rayDirection, -targetSphere.radius);
+    const point = rayHits[0]?.point ?? this.outlineEntry(toObject, targetCentre);
     rayHits.length = 0;
     return point;
+  }
+
+  /**
+   * For a ray that hit nothing: the later of its entries into `toObject`'s bounding
+   * sphere (centred on `targetCentre`) and its bounding box. Both contain the object and
+   * the ray runs through their common centre, so whichever it enters last lies closer to
+   * the object. Reads the ray from the scratch vectors `shootRayFromObject` set.
+   */
+  private outlineEntry(toObject: THREE.Mesh, targetCentre: THREE.Vector3): THREE.Vector3 {
+    const sphereEntry = targetCentre.clone().addScaledVector(rayDirection, -targetSphere.radius);
+    const entry = boundingBoxEntry(toObject);
+    if (entry && entry.distanceToSquared(rayOrigin) > sphereEntry.distanceToSquared(rayOrigin)) {
+      return entry.clone();
+    }
+    return sphereEntry;
   }
 }
 

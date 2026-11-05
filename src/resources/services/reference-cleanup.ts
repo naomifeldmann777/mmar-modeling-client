@@ -1,5 +1,6 @@
 import type { AttributeInstance, RoleInstance, SceneInstance, UUID } from "@gds";
 import { globalObject } from "@/engine/global-definition";
+import { attributesOf, referenceTarget } from "@/resources/util/scene-walk";
 import { expressionUtility } from "./expression-utility";
 
 /**
@@ -10,32 +11,10 @@ import { expressionUtility } from "./expression-utility";
  * init.sql). An open tab holds its own copy of the scene instance, so the same happens
  * here: otherwise the tab keeps showing the reference and writes it back on the next save.
  *
- * Tables need nothing more to be redrawn: the scene's mechanisms run every second on
- * the active tab, and on a tab as soon as it is selected.
+ * On the active tab the instance owning a cleared reference is redrawn, whether the
+ * reference sat in the attribute itself or in a cell of its table: a vizRep that draws a
+ * table reads it through the table attribute.
  */
-
-function referenceTarget(role: RoleInstance | null | undefined): UUID | undefined {
-  if (!role) return undefined;
-  return (
-    role.uuid_has_reference_class_instance ??
-    role.uuid_has_reference_relationclass_instance ??
-    role.uuid_has_reference_port_instance ??
-    role.uuid_has_reference_scene_instance ??
-    role.uuid_has_reference_attribute_instance ??
-    undefined
-  );
-}
-
-/** Every attribute instance of the scene, its classes, relations and ports. Table cells are not listed. */
-function attributesOf(scene: SceneInstance): AttributeInstance[] {
-  const classes = [...(scene.class_instances ?? []), ...(scene.relationclasses_instances ?? [])];
-  const ports = [...(scene.port_instances ?? []), ...classes.flatMap((instance) => instance.port_instance ?? [])];
-  return [
-    ...(scene.attribute_instances ?? []),
-    ...classes.flatMap((instance) => instance.attribute_instance ?? []),
-    ...ports.flatMap((port) => port.attribute_instances ?? []),
-  ];
-}
 
 function collectTargets(attribute: AttributeInstance, targets: Set<UUID>): void {
   const target = referenceTarget(attribute.role_instance_from);
@@ -53,13 +32,17 @@ export function referencedTargets(scene: SceneInstance): Set<UUID> {
 /**
  * Clear the references to `deleted` held by `attribute` and by the cells of its table,
  * nested tables included.
- * @returns Whether `attribute` itself held one.
+ * @returns Whether anything was cleared: `attribute` itself or any cell of its table.
  */
 function clearReferences(attribute: AttributeInstance, deleted: Set<UUID>): boolean {
-  for (const cell of attribute.table_attributes ?? []) clearReferences(cell, deleted);
+  let cleared = false;
+  // Every cell is visited: a `some` would stop at the first cleared one.
+  for (const cell of attribute.table_attributes ?? []) {
+    if (clearReferences(cell, deleted)) cleared = true;
+  }
 
   const target = referenceTarget(attribute.role_instance_from);
-  if (!target || !deleted.has(target)) return false;
+  if (!target || !deleted.has(target)) return cleared;
   attribute.role_instance_from = null as unknown as RoleInstance;
   attribute.value = "";
   return true;

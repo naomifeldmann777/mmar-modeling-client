@@ -289,8 +289,15 @@ export class HistoryService {
     for (const addition of addedClasses) this.reinsertClassInstance(scene, addition.instance);
     if (addedClasses.length > 0) await persistencyHandler.checkIfClassinstanceInScene();
 
-    for (const addition of addedRelations) this.reinsertRelationInstance(scene, addition.instance);
+    const reinsertedRelations = addedRelations
+      .map((addition) => this.reinsertRelationInstance(scene, addition.instance))
+      .filter((instance): instance is RelationclassInstance => instance !== undefined);
     if (addedRelations.length > 0) await persistencyHandler.checkIfRelationclassinstanceInScene();
+    // The instances a restored relation connects may draw from their relations, and a
+    // restored class was drawn above before its relations were back.
+    for (const relation of reinsertedRelations) {
+      eventBus.publish("checkForVizRepUpdateByRelationInstance", relation);
+    }
 
     if (delta.sceneFields) this.applySceneFields(scene, delta.sceneFields);
 
@@ -333,8 +340,9 @@ export class HistoryService {
     this.broadcast({ type: "add_class_instance", classInstance: instance });
   }
 
-  private reinsertRelationInstance(scene: SceneInstance, json: Json): void {
-    if (scene.relationclasses_instances.some((instance) => instance.uuid === json["uuid"])) return;
+  /** @returns The restored relation, or undefined when the scene still had it. */
+  private reinsertRelationInstance(scene: SceneInstance, json: Json): RelationclassInstance | undefined {
+    if (scene.relationclasses_instances.some((instance) => instance.uuid === json["uuid"])) return undefined;
     const instance = RelationclassInstance.fromJS(json) as unknown as RelationclassInstance;
     scene.relationclasses_instances.push(instance);
     this.registerAttributeInstances(instance.attribute_instance);
@@ -346,6 +354,7 @@ export class HistoryService {
       }
     }
     this.broadcast({ type: "add_relation_class_instance", relationClassInstance: instance });
+    return instance;
   }
 
   private registerAttributeInstances(attributeInstances: AttributeInstance[] | undefined): void {

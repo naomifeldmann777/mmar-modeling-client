@@ -131,6 +131,26 @@ describe("DeletionHandler.deleteClassInstance — cascade", () => {
     expect(mocks.globalObject.doSceneInstancePatch).toBe(true);
   });
 
+  // The instances a relation connected may draw from their relations. The redraw has to
+  // be asked for once the relation is out of the scene, or it would still be drawn.
+  it("has the ends of the removed relation redrawn, once it has left the scene", async () => {
+    const asked: { relation: string; ends: string[]; stillInScene: boolean }[] = [];
+    const sub = eventBus.subscribe("checkForVizRepUpdateByRelationInstance", (relation) =>
+      asked.push({
+        relation: relation.uuid,
+        ends: [relation.role_instance_from.uuid_has_reference_class_instance, relation.role_instance_to.uuid_has_reference_class_instance],
+        stillInScene: sceneInstance.relationclasses_instances.some((candidate) => candidate.uuid === relation.uuid),
+      }),
+    );
+
+    await deletionHandler.deleteClassInstance(sceneInstance.class_instances[0], 0);
+    // A second delete of the same relation finds it gone and asks for nothing.
+    await deletionHandler.deleteRelationclassInstance(makeScene().relationclasses_instances[0]);
+    sub.dispose();
+
+    expect(asked).toEqual([{ relation: REL, ends: [CI_A, CI_B], stillInScene: false }]);
+  });
+
   it("does not call the DB delete endpoints when autoSave is off", async () => {
     const classA = sceneInstance.class_instances[0];
 

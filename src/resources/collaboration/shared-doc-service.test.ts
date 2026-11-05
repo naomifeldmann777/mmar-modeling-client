@@ -369,6 +369,29 @@ describe("observers", () => {
     expect(received).toEqual([{ tabIndex: 0 }]);
   });
 
+  // The instances a relation connects may draw from their relations.
+  it("has the ends of a relation a peer added or deleted redrawn", () => {
+    scene.relationclasses_instances = [
+      { uuid: "ri-old", uuid_class: "rc-1", name: "Flow", custom_variables: {}, attribute_instance: [], line_points: [] },
+    ] as any;
+    const session = service.attach(0, scene, "edit");
+    const received: string[] = [];
+    const sub = eventBus.subscribe("checkForVizRepUpdateByRelationInstance", (relation) => received.push(relation.uuid));
+
+    session.ydoc.transact(() => {
+      const map = new Y.Map<unknown>();
+      map.set("uuid", "ri-remote");
+      map.set("uuid_class", "relclass-1");
+      session.ydoc.getMap<Y.Map<unknown>>("relationclasses_instances").set("ri-remote", map);
+    }, "remote-peer");
+    session.ydoc.transact(() => {
+      session.ydoc.getMap<Y.Map<unknown>>("relationclasses_instances").delete("ri-old");
+    }, "remote-peer");
+    sub.dispose();
+
+    expect(received).toEqual(["ri-remote", "ri-old"]);
+  });
+
   it("applies a remote edit of the SCENE's own attribute and refreshes the window", () => {
     const session = service.attach(0, scene, "edit");
     const received: AttributeInstance[] = [];

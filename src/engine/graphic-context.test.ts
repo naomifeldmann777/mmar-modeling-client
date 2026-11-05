@@ -120,6 +120,22 @@ describe("runVizRepFunction", () => {
   });
 });
 
+describe("image textures", () => {
+  const PIXEL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+
+  // An image's pixels are sRGB. Unmarked, three takes them as linear and brightens them
+  // again on output, which showed every image and icon washed out.
+  it.each([
+    ["graphic_plane", `async function vizRep(gc) { await gc.graphic_plane(1, 1, undefined, '${PIXEL}'); }`],
+    ["graphic_cube", `async function vizRep(gc) { await gc.graphic_cube(1, 1, 1, undefined, '${PIXEL}'); }`],
+  ])("marks a %s texture as sRGB", async (_primitive, vizRep) => {
+    await graphicContext.runVizRepFunction(vizRep);
+
+    const [mesh] = Object.values(graphicContext.object3D) as THREE.Mesh[];
+    expect((mesh.material as THREE.MeshBasicMaterial).map!.colorSpace).toBe(THREE.SRGBColorSpace);
+  });
+});
+
 describe("drawVizRep", () => {
   it("draws a class instance into the scene under the instance uuid", async () => {
     const classInstance = makeClassInstance();
@@ -139,6 +155,31 @@ describe("drawVizRep", () => {
     expect(object.userData.Label).toHaveLength(1);
     expect(object.children.some((c) => c.userData.isButton)).toBe(true);
     expect(fakeGlobal.globalObject.buttonObjects).toHaveLength(1);
+  });
+
+  // The offsets used to be dropped unless variable names came with them, which put every
+  // such label at the centre of its object.
+  it("places a label where graphic_text put it when no variable names come with it", async () => {
+    const classInstance = makeClassInstance();
+    fakeGlobal.globalObject.current_class_instance = classInstance;
+    await graphicContext.runVizRepFunction(`async function vizRep(gc) {
+      await gc.graphic_cube(1, 1, 1, 'red');
+      await gc.graphic_text(0.4, -0.2, 0.1, 0.1, 'black', 'hello');
+    }`);
+
+    const object = await graphicContext.drawVizRep(new THREE.Vector3(0, 0, 0), classInstance);
+
+    expect((object.userData.Label[0] as THREE.Object3D).position.toArray()).toEqual([0.4, -0.2, 0.1]);
+  });
+
+  it("places a label by its stored variables when it has them", async () => {
+    const classInstance = makeClassInstance();
+    fakeGlobal.globalObject.current_class_instance = classInstance;
+    await graphicContext.runVizRepFunction(CUBE_WITH_LABEL_VIZREP);
+
+    const object = await graphicContext.drawVizRep(new THREE.Vector3(0, 0, 0), classInstance);
+
+    expect((object.userData.Label[0] as THREE.Object3D).position.toArray()).toEqual([0.5, 0.2, 0]);
   });
 
   it("resets the gc buckets after drawing so the next vizRep starts clean", async () => {

@@ -245,7 +245,7 @@ export class SharedDocService {
 
       session.applyingRemote = true;
       try {
-        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [] };
+        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [], relationsAddedOrRemoved: [] };
         for (const event of events) {
           const r = applyYDocClassChangeToSceneInstance(event, tabCtx.sceneInstance, tabCtx.threeScene, this.globalObjectInstance);
           if (r.classInstanceAdded) aggregate.classInstanceAdded = true;
@@ -285,12 +285,13 @@ export class SharedDocService {
 
       session.applyingRemote = true;
       try {
-        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [] };
+        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [], relationsAddedOrRemoved: [] };
         for (const event of events) {
           const r = applyYDocRelationChangeToSceneInstance(event, tabCtx.sceneInstance, tabCtx.threeScene, this.globalObjectInstance);
           if (r.relationInstanceAdded) aggregate.relationInstanceAdded = true;
           aggregate.changedAttributeInstances.push(...r.changedAttributeInstances);
           aggregate.deletedInstanceUuids.push(...r.deletedInstanceUuids);
+          aggregate.relationsAddedOrRemoved.push(...r.relationsAddedOrRemoved);
         }
         this.globalObjectInstance.render = true;
 
@@ -299,6 +300,10 @@ export class SharedDocService {
         }
         if (aggregate.relationInstanceAdded) {
           eventBus.publish("remoteRelationInstanceAdded", { tabIndex });
+        }
+        // The instances a peer's added or deleted relation connects may draw from it.
+        for (const relation of aggregate.relationsAddedOrRemoved) {
+          eventBus.publish("checkForVizRepUpdateByRelationInstance", relation);
         }
         this.notifyRemoteMutation(aggregate);
         this.clearSelectionOfRemotelyDeleted(tabIndex, aggregate);
@@ -322,7 +327,7 @@ export class SharedDocService {
 
       session.applyingRemote = true;
       try {
-        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [] };
+        const aggregate: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [], relationsAddedOrRemoved: [] };
         for (const event of events) {
           const r = applyYDocSceneAttributeChangeToSceneInstance(event, tabCtx.sceneInstance, this.globalObjectInstance);
           aggregate.changedAttributeInstances.push(...r.changedAttributeInstances);

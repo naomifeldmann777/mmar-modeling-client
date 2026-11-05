@@ -120,6 +120,9 @@ export class ObjectspaceAlgorithms {
     return new Promise((resolve, reject) => {
       const img = new Image();
       const texture = new THREE.Texture(img);
+      // The image's pixels are sRGB; unmarked, three takes them as linear and the image
+      // shows washed out (see GraphicContext.applyTextureMap).
+      texture.colorSpace = THREE.SRGBColorSpace;
 
       img.onload = () => {
         texture.needsUpdate = true;

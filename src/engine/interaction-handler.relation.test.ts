@@ -80,6 +80,7 @@ vi.mock("@/engine/deletion-handler", () => ({ deletionHandler: {} }));
 vi.mock("@/resources/services/simulation-utility", () => ({ simulationUtility: {} }));
 
 const { interactionHandler } = await import("@/engine/interaction-handler");
+const { eventBus } = await import("@/resources/services/event-bus");
 
 /** The relation being drawn, its line so far, and a left click on the object `target`. */
 function drawing(linePoints: string[], target: string) {
@@ -131,5 +132,28 @@ describe("interaction-handler: the click that closes a relation", () => {
     expect(relation.line_points.map((point: { UUID: string }) => point.UUID)).toEqual([A, B]);
     expect(fakeGlobal.globalObject.objectScaled).toBe(true);
     expect(fakeGlobal.globalObject.render).toBe(true);
+  });
+
+  // A vizRep that draws from its relations has to see the new one.
+  it("has the instances the finished relation connects redrawn", async () => {
+    const relation = drawing([A, "pointer"], B);
+    const received: unknown[] = [];
+    const sub = eventBus.subscribe("checkForVizRepUpdateByRelationInstance", (payload) => received.push(payload));
+
+    await interactionHandler.onDrawingModeRelationclass();
+    sub.dispose();
+
+    expect(received).toEqual([relation]);
+  });
+
+  it("redraws nothing for a click that does not finish the relation", async () => {
+    drawing([A, "pointer"], A);
+    const received: unknown[] = [];
+    const sub = eventBus.subscribe("checkForVizRepUpdateByRelationInstance", (payload) => received.push(payload));
+
+    await interactionHandler.onDrawingModeRelationclass();
+    sub.dispose();
+
+    expect(received).toEqual([]);
   });
 });

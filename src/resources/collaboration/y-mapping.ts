@@ -112,6 +112,11 @@ export interface YDocChangeResult {
    * showing an object that is no longer in the scene.
    */
   deletedInstanceUuids: string[];
+  /**
+   * The relation instances a peer added or deleted, as they were. The instances at their
+   * ends may draw from their relations, so the observer has those redrawn.
+   */
+  relationsAddedOrRemoved: RelationclassInstance[];
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +281,7 @@ export function applyYDocClassChangeToSceneInstance(
   threeScene: THREE.Scene,
   globalObjectInstance: GlobalDefinition,
 ): YDocChangeResult {
-  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [] };
+  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [], relationsAddedOrRemoved: [] };
   const path = event.path as Array<string | number>;
 
   // Path is relative to the 'class_instances' Y.Map (the observeDeep root).
@@ -413,7 +418,7 @@ export function applyYDocRelationChangeToSceneInstance(
   threeScene: THREE.Scene,
   globalObjectInstance: GlobalDefinition,
 ): YDocChangeResult {
-  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [] };
+  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [], relationsAddedOrRemoved: [] };
   const path = event.path as Array<string | number>;
 
   // Top-level add / delete of an entire RelationclassInstance entry
@@ -423,7 +428,7 @@ export function applyYDocRelationChangeToSceneInstance(
         // Reported back so the observer can drop a selection that pointed here.
         result.deletedInstanceUuids.push(uuid);
         const idx = sceneInstance.relationclasses_instances.findIndex((r) => r.uuid === uuid);
-        if (idx !== -1) sceneInstance.relationclasses_instances.splice(idx, 1);
+        if (idx !== -1) result.relationsAddedOrRemoved.push(...sceneInstance.relationclasses_instances.splice(idx, 1));
         const obj = threeScene.getObjectByProperty("uuid", uuid);
         if (obj) threeScene.remove(obj);
         globalObjectInstance.dragObjects = globalObjectInstance.dragObjects.filter((o) => o.uuid !== uuid);
@@ -447,6 +452,7 @@ export function applyYDocRelationChangeToSceneInstance(
             globalObjectInstance.role_instances.push(newRi.role_instance_to);
           }
           result.relationInstanceAdded = true;
+          result.relationsAddedOrRemoved.push(newRi);
         }
       }
     });
@@ -510,7 +516,7 @@ export function applyYDocSceneAttributeChangeToSceneInstance(
   sceneInstance: SceneInstance,
   globalObjectInstance: GlobalDefinition,
 ): YDocChangeResult {
-  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [] };
+  const result: YDocChangeResult = { classInstanceAdded: false, relationInstanceAdded: false, changedAttributeInstances: [], deletedInstanceUuids: [], relationsAddedOrRemoved: [] };
   const path = event.path as Array<string | number>;
   sceneInstance.attribute_instances = sceneInstance.attribute_instances ?? [];
 

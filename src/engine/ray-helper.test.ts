@@ -115,6 +115,41 @@ describe("RayHelper.shootRayFromObject", () => {
     expect(end!.y).toBeCloseTo(4, 3);
   });
 
+  /** A flat mesh in the modelling plane, double-sided like a vizRep plane, world matrix current. */
+  function flatAt(geometry: THREE.BufferGeometry, x: number, y: number, rotationZ = 0): THREE.Mesh {
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+    mesh.position.set(x, y, 0);
+    mesh.rotation.z = rotationZ;
+    mesh.updateMatrixWorld(true);
+    return mesh;
+  }
+
+  // A ray in the plane of a flat vizRep runs along it and hits nothing. Its bounding
+  // sphere reaches far past the sides of a long object, so the line used to stop short.
+  it("ends a line that misses a flat object at its side, not out on its bounding sphere", () => {
+    const point = rayHelper.shootRayFromObject(cubeAt(0, 0, 0), flatAt(new THREE.PlaneGeometry(4, 1), 10, 0));
+
+    expect(point!.x).toBeCloseTo(8, 3);
+    expect(point!.y).toBeCloseTo(0, 3);
+  });
+
+  it("takes the side of a flat object as the object is turned", () => {
+    const point = rayHelper.shootRayFromObject(cubeAt(0, 0, 0), flatAt(new THREE.PlaneGeometry(4, 1), 10, 0, Math.PI / 2));
+
+    expect(point!.x).toBeCloseTo(9.5, 3);
+  });
+
+  it("keeps the bounding sphere where it lies closer to the object than the box", () => {
+    // A diamond: its box's corners stick out past its sphere, along the diagonal.
+    const diamond = new THREE.BufferGeometry();
+    diamond.setAttribute("position", new THREE.Float32BufferAttribute([1, 0, 0, 0, 1, 0, -1, 0, 0, 1, 0, 0, -1, 0, 0, 0, -1, 0], 3));
+
+    const point = rayHelper.shootRayFromObject(cubeAt(0, 0, 0), flatAt(diamond, 10, 10));
+
+    expect(point!.x).toBeCloseTo(10 - Math.SQRT1_2, 3);
+    expect(point!.y).toBeCloseTo(10 - Math.SQRT1_2, 3);
+  });
+
   it("falls back to the silhouette point rather than undefined when nothing is hit", () => {
     const empty = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
     empty.position.set(4, 2, 0);

@@ -1,5 +1,6 @@
 import type { AttributeInstance } from "@gds/models/instance/Instance_attributes.structure";
 import type { Attribute } from "@gds/models/meta/Metamodel_attributes.structure";
+import type { RelationclassInstance } from "@gds/models/instance/Instance_relationclasses.structure";
 
 /**
  * The app's typed event bus: `.publish(event, payload)` and `.subscribe(event, cb)`,
@@ -99,6 +100,8 @@ export interface EventPayloads {
   // VizRep pipeline
   checkForVizRepUpdate: void;
   checkForVizRepUpdateByAttributeInstance: AttributeInstance;
+  /** A relation was added or removed: redraw the instances at its two ends. */
+  checkForVizRepUpdateByRelationInstance: RelationclassInstance;
 
   // Undo / redo history
   historyRecord: HistoryRecordPayload;

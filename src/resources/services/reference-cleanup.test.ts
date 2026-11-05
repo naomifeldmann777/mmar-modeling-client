@@ -149,6 +149,27 @@ describe("removeReferencesTo", () => {
     );
   });
 
+  it("redraws the instance owning a table when a reference in one of its cells is cleared", async () => {
+    const table = {
+      uuid: "table",
+      uuid_attribute: "meta-table",
+      assigned_uuid_class_instance: "owner",
+      value: "",
+      table_attributes: [noteCell("table", 0, "kept as it is"), referenceCell("table", 1, "gone")],
+    };
+    const scene = sceneWith([table]);
+    openTabs(scene);
+
+    await removeReferencesTo(["gone"]);
+
+    expect(rowsOf(scene)).toEqual([
+      [0, "kept as it is", null],
+      [1, "", null],
+    ]);
+    // Through the table attribute: that is what a vizRep drawing the table names.
+    expect(mocks.expressionUtility.checkForVisualizationUpdateByAttributeUUID).toHaveBeenCalledExactlyOnceWith("owner", "meta-table");
+  });
+
   it("clears a reference on a tab that is not active without redrawing it", async () => {
     const scene = sceneWith([plainReference()]);
     openTabs(sceneWith([]), scene);

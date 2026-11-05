@@ -261,6 +261,9 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     this.globalObjectInstance.doSceneInstancePatch = true;
 
     this.announceDeletion(sceneInstance.uuid, "relation", relationclassInstance.uuid);
+    // The instances it connected may draw from their relations. One being deleted in the
+    // same cascade is skipped by the redraw once it is gone.
+    this.eventAggregator.publish("checkForVizRepUpdateByRelationInstance", relationclassInstance);
   }
 
   /**
