@@ -70,6 +70,12 @@ const EMPTY_ROW = ["", "==", "", "-"]; // the row MMAR puts into every new condi
 const condition = (id: string, ...rows: string[][]) => table(`${id}-cond`, "m-condition", CONDITION, rows); // a flow's condition table
 const flow = (id: string, from: string, to: string, ...rows: string[][]) => line(id, "m-flow", from, to, [condition(id, ...rows)]); // a flow with its condition table
 
+/** Turns the variable cell of `row` in the condition table of `flowLine` into a reference to `variableId`, as the reference dialog does. */
+const refer = (flowLine: ReturnType<typeof flow>, row: number, variableId: string) => {
+  const cell = (flowLine.attribute_instance[1] as ReturnType<typeof table>).table_attributes.find((c) => c.table_row === row && c.uuid_attribute === "c-variable"); // the condition table follows the Name attribute
+  Object.assign(cell!, { role_instance_from: { uuid_has_reference_class_instance: variableId } }); // the role instance that records the reference; the cell keeps its text
+};
+
 const scene = (classInstances: object[], relations: object[]) =>
   ({ uuid: "scene-1", class_instances: classInstances, relationclasses_instances: relations }) as unknown as SceneInstance; // only the fields the transformer reads
 
@@ -195,6 +201,23 @@ describe("transformModel: rules", () => {
     const graph = transformModel(sceneType, scene([], [flow("f", "a", "b")]), mapped({ f: { concept: "SequenceFlow", data: { TransitionCondition: "f-name" } } })); // the Name attribute chosen by mistake
     expect(graph.flows.f.condition).toBeNull(); // unreadable
     expect(graph.issues[0].message).toContain("must be a table with the columns variable, operator, value, logical operator"); // says what is expected
+  });
+
+  it("reads a reference cell as the current name of the variable it points at", () => {
+    const f = flow("f", "a", "b", ["Lager", "==", "ja", "-"], ["kunde", "==", "premium", "AND"]); // row 0 picked when the variable was still called "Lager"; row 1 typed
+    refer(f, 0, "v"); // row 0's variable cell is a reference to v
+    const model = scene([box("v", "lager")], [f]); // v has been renamed to "lager" since
+    const graph = transformModel(sceneType, model, mapped({ v: { concept: "Variable", data: { VariableName: "v-name" } }, f: { concept: "SequenceFlow", data: { TransitionCondition: "f-cond" } } }));
+    expect(graph.flows.f.condition?.map((row) => row.variableName)).toEqual(["lager", "kunde"]); // the current name, not the stale "Lager"; typed text as before
+    expect(graph.issues).toEqual([]); // nothing to report
+  });
+
+  it("reports a reference cell that points at an element of another model", () => {
+    const f = flow("f", "a", "b", ["lager", "==", "ja", "-"]); // picked from the variables of another model
+    refer(f, 0, "elsewhere"); // an element this model does not contain
+    const graph = transformModel(sceneType, scene([], [f]), mapped({ f: { concept: "SequenceFlow", data: { TransitionCondition: "f-cond" } } }));
+    expect(graph.flows.f.condition?.[0].variableName).toBe("lager"); // the stored text is kept
+    expect(graph.issues).toEqual([{ elementId: "f", message: 'A row of the TransitionCondition of "Name" refers to "lager", which belongs to another model.' }]); // reported on the flow (spec 10, check 2)
   });
 
   it("reads a variable's name from its mapped attribute, and null when none is mapped", () => {

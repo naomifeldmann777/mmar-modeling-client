@@ -32,11 +32,19 @@
  * gives every new table one such row. A half-filled row is kept, so the validator can
  * report it (spec 10, check 17).
  *
+ * A cell may be a reference instead of typed text (in the BPMN 2.0 metamodel, the variable
+ * column of a condition has the attribute type "Variable Reference 2.0"). Such a cell is
+ * read as the CURRENT name of the element it points at, provided that element is mapped to
+ * Variable; the text MMAR stored in the cell is the name at the time it was chosen and goes
+ * stale when the variable is renamed. A reference to an element of another model (the
+ * reference dialog offers the variables of every loaded model) becomes an issue. So conditions still refer to variables by name (spec
+ * 2.2), and nothing after the transformer knows whether a name was typed or picked.
+ *
  * Source: spec 3 (mapping per element; unmapped elements are ignored), spec 6.2 (a draw
  * belongs to the node at which it occurs, whatever the metamodel looks like), spec 7
  * (nodes, flows, variables and random generators), plan 4.
  */
-import { table_rows, type Attribute, type ClassInstance, type SceneInstance, type SceneType } from "@gds";
+import { table_rows, type Attribute, type AttributeInstance, type ClassInstance, type SceneInstance, type SceneType } from "@gds";
 import { NAME_ATTRIBUTE_UUID } from "@/constants";
 import type { ConditionRow, DistributionEntry, SimulationGraph } from "./graph";
 import type { MappableModel, ProcessSimulationMapping } from "./mapping"; // the list readMappableModel fills in, and the mapping transformModel reads
@@ -107,6 +115,16 @@ export function transformModel(
   );
   const conceptOf = (id: string | null) => (id ? mapping.elements[id]?.concept : undefined); // the concept of a connected element, if it has one
 
+  // The name conditions use for a variable: the text of the attribute mapped as its
+  // VariableName, trimmed so " lager" and "lager" are the same name. null when no such
+  // attribute is mapped (spec 10, check 3 reports that). Read from the model, not from
+  // graph.variables, so it does not matter whether pass 1 has reached the variable yet.
+  const variableNameOf = (variableId: string): string | null => {
+    const attributeId = mapping.elements[variableId]?.data?.VariableName; // the attribute holding the name
+    const attribute = attributeId === undefined ? undefined : elements.get(variableId)?.attribute_instance?.find((candidate) => candidate.uuid === attributeId); // that attribute; loadMapping has checked it belongs to the element
+    return attribute ? (attribute.value ?? "").trim() : null; // "" is reported by the validator (spec 10, check 10)
+  };
+
   // Pass 1: one graph entry per mapped element, chosen by its concept alone.
   for (const [id, entry] of Object.entries(mapping.elements)) {
     const element = elements.get(id); // the model element behind the entry
@@ -151,12 +169,24 @@ export function transformModel(
       // where a row has no cell for a column. Rows come out in order 0, 1, 2, ...
       const grid = table_rows(attribute, columns);
 
-      // From cell objects to plain text, row by row:
-      // - slice keeps only the columns the format rule knows (4 for a condition, 2 for a
-      //   distribution); a metamodel may add further columns, they are ignored;
-      // - `cell?.value ?? ""` takes the cell's text, or "" where the row has no cell;
-      // - trim drops spaces around it, so " lager" and "lager" are the same name.
-      return grid.map((row) => row.slice(0, columnNames.length).map((cell) => (cell?.value ?? "").trim()));
+      // From cell objects to plain text, row by row: slice keeps only the columns the format
+      // rule knows (4 for a condition, 2 for a distribution); a metamodel may add further
+      // columns, they are ignored. cellText turns each remaining cell into its text.
+      return grid.map((row) => row.slice(0, columnNames.length).map((cell) => cellText(cell, dataConcept)));
+    };
+
+    // The text of one table cell. Example, a condition row whose variable cell points at the
+    // variable "v-1", which was called "Lager" when it was picked and is now called "lager":
+    //   cell { value: "Lager", role_instance_from: { uuid_has_reference_class_instance: "v-1" } }  ->  "lager"
+    const cellText = (cell: AttributeInstance | undefined, dataConcept: DataConcept): string => {
+      const text = (cell?.value ?? "").trim(); // the cell's text, "" where the row has no cell; trimmed so " lager" and "lager" are the same name
+      const target = cell?.role_instance_from?.uuid_has_reference_class_instance; // set only when the cell is a reference to an element
+      if (!target) return text; // every cell that is no reference (operator, value, probability, ...), or a reference that was cleared (MMAR then empties the text too)
+      if (!elements.has(target)) {
+        issue(id, `A row of the ${dataConcept} of "${label}" refers to "${text}", which belongs to another model.`); // the reference dialog offers the variables of every loaded model
+        return text; // kept, so the message and the row show what was picked
+      }
+      return variableNameOf(target) ?? text; // its current name; without a mapped VariableName the text (spec 10, check 3 reports the variable)
     };
 
     if (isNodeConcept(entry.concept)) {
@@ -194,9 +224,7 @@ export function transformModel(
         distribution: rows ? distributionEntries(rows) : null, // [] when the table holds no filled row
       };
     } else if (entry.concept === "Variable") {
-      const attributeId = entry.data?.VariableName; // the attribute holding the name conditions use
-      const attribute = attributeId === undefined ? undefined : element.attribute_instance?.find((candidate) => candidate.uuid === attributeId); // that attribute; loadMapping has checked it belongs to the element
-      graph.variables[id] = { id, label, name: attribute ? (attribute.value ?? "").trim() : null }; // null: not mapped; "" is reported by the validator (spec 10, check 10)
+      graph.variables[id] = { id, label, name: variableNameOf(id) }; // the same name a reference cell reads, so both always agree
     }
   }
 
