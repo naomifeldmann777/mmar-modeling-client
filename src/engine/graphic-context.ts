@@ -915,9 +915,10 @@ export class GraphicContext {
     correspondingSceneObject.children[1].geometry = toObject.geometry;
     correspondingSceneObject.children[1].material = toObject.material;
 
-    // Update the line of he relationclass.
+    // Update the look of the line (colour, width, dashes), but not its route: the line the
+    // vizRep just drew is a single point at the origin, and the animator re-routes a line
+    // only when something moves. Taking its geometry made the line vanish until then.
     const line = this.object3D[relationclass_instance.uuid];
-    correspondingSceneObject.geometry = line.geometry;
     correspondingSceneObject.material = line.material;
 
     // Update the labels of the relation

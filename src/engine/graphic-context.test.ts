@@ -2,7 +2,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import * as THREE from "three";
 import { Text } from "troika-three-text";
-import { ClassInstance } from "@gds";
+import { ClassInstance, type RelationclassInstance } from "@gds";
+import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
+import type { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 
 /**
  * P4 headless vizRep-evaluation tests (plan §9 P4 "Verify").
@@ -233,6 +235,30 @@ describe("drawVizRep", () => {
 
     const vars = classInstance.custom_variables as Record<string, { value: number }>;
     expect(vars.width.value).toBe(42);
+  });
+});
+
+describe("updateVizRepRelClass", () => {
+  /** A relation vizRep: a line in `color` with an end object at each side and a middle label. */
+  const relationVizRep = (color: string) => `async function vizRep(gc) {
+    await gc.rel_graphic_line('${color}', 0.003, false, 0, 0, 0);
+    await gc.rel_from_object(await gc.graphic_cube(0.006, 0.006, 0.006, 'white'));
+    await gc.rel_to_object(await gc.graphic_cube(0.006, 0.006, 0.006, 'black'));
+    await gc.rel_graphic_text_middle(await gc.graphic_text(0, 0, 0, 0.14, 'black', 'lager == ja'));
+  }`;
+
+  it("keeps the route of the line when an attribute change redraws it, and takes its new look", async () => {
+    await graphicContext.runVizRepFunction(relationVizRep("black"));
+    const drawn = await graphicContext.drawVizRep_rel(); // the line as it sits in the scene
+    const route = new LineGeometry(); // the route the animator gives the line once its ends are known
+    route.setPositions([0, 0, 0, 1, 1, 0]);
+    drawn.geometry = route;
+
+    await graphicContext.runVizRepFunction(relationVizRep("red")); // e.g. its condition changed
+    await graphicContext.updateVizRepRelClass({ uuid: CURRENT_UUID } as RelationclassInstance);
+
+    expect(drawn.geometry).toBe(route); // regression: it took the redrawn single point, and the line vanished until something moved
+    expect((drawn.material as LineMaterial).color.getHexString()).toBe("ff0000"); // the new look is taken
   });
 });
 
