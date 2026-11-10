@@ -77,6 +77,14 @@ describe("stepper-highlight", () => {
     expect(mocks.globalObject.render).toBe(true);
   });
 
+  it("writes the value label as big as the variable's name", () => {
+    const variable = scene.getObjectByProperty("uuid", "v")!; // the variable "lager"
+    variable.userData.Label = [Object.assign(new THREE.Object3D(), { fontSize: 0.2 })]; // its name, as attachText leaves it: a text 0.2 tall
+    showHighlights(run);
+    const label = scene.children.find((child): child is THREE.Sprite => child instanceof THREE.Sprite)!;
+    expect(label.scale.y * (44 / 64)).toBeCloseTo(0.2); // its letters (44 px of a 64 px pill, label-sprite) are 0.2 tall too
+  });
+
   it("removes everything again", () => {
     showHighlights(run);
     clearHighlights();

@@ -260,6 +260,25 @@ describe("updateVizRepRelClass", () => {
     expect(drawn.geometry).toBe(route); // regression: it took the redrawn single point, and the line vanished until something moved
     expect((drawn.material as LineMaterial).color.getHexString()).toBe("ff0000"); // the new look is taken
   });
+
+  it("keeps the middle label at the middle of a line that had no label when it was drawn", async () => {
+    const noLabel = `async function vizRep(gc) {
+      await gc.rel_graphic_line('black', 0.003, false, 0, 0, 0);
+      await gc.rel_from_object(await gc.graphic_cube(0.006, 0.006, 0.006, 'white'));
+      await gc.rel_to_object(await gc.graphic_cube(0.006, 0.006, 0.006, 'black'));
+    }`; // e.g. a sequence flow whose condition is still empty
+    await graphicContext.runVizRepFunction(noLabel);
+    const drawn = await graphicContext.drawVizRep_rel();
+    drawn.userData.midPoint = new THREE.Vector3(1, 2, 0); // the animator routes the line: a plain value, no label to move yet
+
+    for (const colour of ["black", "red"]) { // the condition is filled in, then changed
+      await graphicContext.runVizRepFunction(relationVizRep(colour));
+      await graphicContext.updateVizRepRelClass({ uuid: CURRENT_UUID } as RelationclassInstance);
+    }
+
+    const label = drawn.children.find((child) => child instanceof Text)!; // the middle label of the second redraw
+    expect(label.position.toArray()).toEqual([1, 2, 0]); // regression: the second redraw put it at the origin
+  });
 });
 
 describe("deleteObject", () => {

@@ -835,6 +835,10 @@ export class GraphicContext {
       textObject.position.z = toAttach.userData["midPoint"].z;
     }
 
+    // The line's middle as it is now: a plain value while the line had no label yet, or read
+    // through the getter an earlier label defined. Kept below, since the getter reads `_midPoint`.
+    const currentMidPoint = toAttach.userData.midPoint;
+
     // Define getter and setter for midPoint
     //like that, the position of the text is bound directly to the userData.midPoint of the parent object (line)
     Object.defineProperty(toAttach.userData, "midPoint", {
@@ -850,6 +854,9 @@ export class GraphicContext {
       configurable: true,
       enumerable: true,
     });
+    // Without this, the first label of a line lost the plain middle, and its next redraw put
+    // the label at the origin until something moved the line.
+    if (currentMidPoint) toAttach.userData._midPoint = currentMidPoint;
 
     // Initialize midPoint if it exists
     if (toAttach.userData._midPoint) {

@@ -33,13 +33,14 @@
  * changed: glows, tokens and labels are extra objects that are removed again.
  *
  * Used by: StepperPanel, which calls `showHighlights` after every step and `clearHighlights`
- * when it closes. A label keeps the size it gets when it is drawn, so it grows or shrinks when
- * the user zooms until the next step redraws it.
+ * when it closes. The value label is as big as the variable's name and zooms with the model.
+ * The token count keeps the size it gets when it is drawn, so it grows or shrinks when the
+ * user zooms until the next step redraws it.
  */
 import * as THREE from "three"; // shapes, colours, bounding boxes
 import { Line2 } from "three/examples/jsm/lines/Line2.js"; // how the client draws lines: a token sits on one
 import { globalObject } from "@/engine"; // the active scene and camera, and the render flag
-import { createNameTag, disposeLabelSprite, scaleLabel } from "@/resources/collaboration/label-sprite"; // camera-facing text labels
+import { createNameTag, disposeLabelSprite, scaleLabel, scaleLabelToText } from "@/resources/collaboration/label-sprite"; // camera-facing text labels
 import type { Run } from "@/resources/process-simulation/stepper"; // what is shown
 
 const POSSIBLE = { colour: "#00e676", opacity: 0.6 }; // bright, luminous green: this node can run now
@@ -48,7 +49,7 @@ const TOKEN = { core: "#212121", rim: "#ffffff" }; // a black dot with a white r
 const VALUE = "#6a1b9a"; // purple: the label of a drawn value
 
 const GLOW_WIDTH = 0.2; // how far the glow reaches beyond the element, as a share of the element's shorter side
-const LABEL_SIZE = 0.75; // the label at three quarters of the client's name-tag size, so it does not crowd the model
+const LABEL_SIZE = 0.75; // a label not sized by a name: three quarters of the client's name-tag size, so it does not crowd the model
 const TOKEN_SIZE = 0.125; // the token's radius, as a share of the shorter side of the element it waits for: the dot is a quarter of that side across
 const TOKEN_DISTANCE = 0.45; // how far the token stays from where the line meets the element, as a share of the same side: clear of the arrow head
 
@@ -194,8 +195,26 @@ function addLabel(scene: THREE.Scene, object: THREE.Object3D | undefined, text: 
   const label = createNameTag(text, VALUE); // a pill with the text
   label.center.set(0, 0.5); // anchored at the middle of its left edge, so it starts right of the variable
   label.position.set(bounds.max.x + (bounds.max.y - bounds.min.y) * 0.15, (bounds.min.y + bounds.max.y) / 2, bounds.max.z); // a small gap to the right, level with the middle
-  scaleLabel(label, globalObject.camera); // a readable size for the current zoom
-  label.scale.multiplyScalar(LABEL_SIZE); // a bit smaller than a name tag
+  const nameHeight = nameTextHeight(object); // how tall the variable's own name is written
+  if (nameHeight) {
+    scaleLabelToText(label, nameHeight); // as big as the names of the elements, and zooming with them
+  } else {
+    scaleLabel(label, globalObject.camera); // no name to match: a readable size for the current zoom
+    label.scale.multiplyScalar(LABEL_SIZE); // a bit smaller than a name tag
+  }
   scene.add(label);
   helpers.push(label);
+}
+
+/**
+ * The height of the letters of an element's name in the model, or null when it has none.
+ * The client attaches the texts a vizRep draws to the element's object (`userData.Label`,
+ * see attachText in graphic-context); they are troika texts, whose `fontSize` is their
+ * height in their own units, so the object's scale turns it into world units.
+ */
+function nameTextHeight(object: THREE.Object3D): number | null {
+  const texts = (object.userData.Label ?? []) as (THREE.Object3D & { fontSize?: unknown })[]; // the texts drawn on the element
+  const name = texts.find((text) => typeof text.fontSize === "number"); // the first one is its name in the BPMN vizReps
+  if (!name) return null; // the element draws no text
+  return (name.fontSize as number) * name.getWorldScale(new THREE.Vector3()).y; // in world units, like the label's own size
 }

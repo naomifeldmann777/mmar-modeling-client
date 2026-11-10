@@ -110,6 +110,18 @@ export function scaleLabel(sprite: THREE.Sprite, camera: THREE.Camera | undefine
   sprite.scale.set(height * aspect, height, 1);
 }
 
+/**
+ * Resize a label so its letters are `textHeight` world units tall, like a text a vizRep
+ * draws: it then grows and shrinks with the model when zooming, instead of keeping its
+ * size on screen as {@link scaleLabel} does. Used where a label belongs to the model, e.g.
+ * the value of a variable in the process-simulation stepper.
+ */
+export function scaleLabelToText(sprite: THREE.Sprite, textHeight: number): void {
+  const height = (textHeight * PILL_HEIGHT) / FONT_PX; // the pill is taller than its letters: FONT_PX of PILL_HEIGHT
+  const aspect = (sprite.userData.labelAspect as number | undefined) ?? 1;
+  sprite.scale.set(height * aspect, height, 1);
+}
+
 /** Free a label's texture and material. The caller removes it from the scene. */
 export function disposeLabelSprite(sprite: THREE.Sprite): void {
   sprite.material.map?.dispose();
