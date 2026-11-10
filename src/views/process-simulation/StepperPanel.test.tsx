@@ -16,7 +16,7 @@ vi.mock("./stepper-session", () => ({ stopStepper: mocks.stopStepper }));
 import { useProcessSimulationStore } from "@/resources/store/processSimulationStore";
 import StepperPanel from "./StepperPanel";
 
-const node = (id: string, label: string, concept: NodeConcept): GraphNode => ({ id, label, concept, incoming: [], outgoing: [] }); // wired by graph()
+const node = (id: string, label: string, concept: NodeConcept): GraphNode => ({ id, label, concept, executionTime: 0, incoming: [], outgoing: [] }); // wired by graph()
 const flow = (id: string, source: string, target: string, value?: string): GraphFlow => ({
   id, label: "Name", source, target, condition: value === undefined ? [] : [{ variableName: "lager", operator: "==", value, logicalOperator: null }], // "lager == value", or no condition
 });

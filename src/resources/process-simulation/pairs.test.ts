@@ -8,7 +8,7 @@ import type { GraphFlow, GraphNode, SimulationGraph } from "./graph";
 import { orBranchEnds } from "./pairs";
 import type { NodeConcept } from "./vocabulary";
 
-const node = (id: string, concept: NodeConcept): GraphNode => ({ id, label: id, concept, incoming: [], outgoing: [] }); // wired by graph()
+const node = (id: string, concept: NodeConcept): GraphNode => ({ id, label: id, concept, executionTime: 0, incoming: [], outgoing: [] }); // wired by graph()
 const flow = (id: string, source: string, target: string): GraphFlow => ({ id, label: id, source, target, condition: [] }); // conditions play no part here
 
 /** A graph from nodes and flows; incoming and outgoing are wired as the transformer does. */

@@ -52,6 +52,10 @@
  *   conditions read is drawn again; otherwise the token takes the same way in every round
  *   and, with some values, never leaves the loop.
  *
+ * Added for the path analysis:
+ * - Check 27: every given execution time is a whole number of seconds and not negative
+ *   (spec 9.1). The transformer reads such a time as null.
+ *
  * Added to check 9 in Phase 6 (and to the specification text): Start, Activity, AND-Join,
  * OR-Join and SynchronizedActivity have exactly one outgoing flow, so that only the split
  * concepts split the flow.
@@ -115,6 +119,7 @@ export function validateGraph(graph: SimulationGraph): ValidationProblem[] {
   checkParallelDraws(context); // check 23, beyond spec 10
   checkPairs(context); // check 24, beyond spec 10
   checkLoops(context, reachable); // check 26, beyond spec 10; only loops a run can reach
+  checkTimes(context); // check 27, for the path analysis (spec 9.1)
 
   return problems.sort((a, b) => a.check - b.check); // in the order of spec 10; sort keeps the order within a check
 }
@@ -947,4 +952,15 @@ function combinations(names: string[], domains: Map<string, Set<string>>): Varia
     (partial, name) => partial.flatMap((values) => [...(domains.get(name) ?? [])].map((value) => ({ ...values, [name]: value }))), // extend every partial combination by every value of the next variable
     [{}], // start: one combination that assigns nothing
   );
+}
+
+// ---------------------------------------------------------------------------------
+// Times (check 27)
+// ---------------------------------------------------------------------------------
+
+/** Check 27: every given execution time is a whole number of seconds and not negative. */
+function checkTimes({ nodes, report }: Context) {
+  for (const node of nodes) {
+    if (node.executionTime === null) report(27, node.id, `${node.concept} "${node.label}" has an execution time that is not a whole number of seconds of 0 or more.`); // e.g. "2.5", "-3" or "abc"
+  }
 }

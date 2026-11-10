@@ -6,7 +6,7 @@ import type { GraphFlow, GraphNode, SimulationGraph } from "@/resources/process-
 import type { NodeConcept } from "@/resources/process-simulation/vocabulary";
 import { useProcessSimulationStore } from "./processSimulationStore";
 
-const node = (id: string, concept: NodeConcept): GraphNode => ({ id, label: id, concept, incoming: [], outgoing: [] }); // wired by graph()
+const node = (id: string, concept: NodeConcept): GraphNode => ({ id, label: id, concept, executionTime: 0, incoming: [], outgoing: [] }); // wired by graph()
 const flow = (id: string, source: string, target: string, value?: string): GraphFlow => ({
   id, label: id, source, target, condition: value === undefined ? [] : [{ variableName: "lager", operator: "==", value, logicalOperator: null }], // "lager == value", or no condition
 });

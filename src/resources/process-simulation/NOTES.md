@@ -439,6 +439,18 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
   transformer reads it as the current name of the referenced variable (decided before
   Phase 9, see the header of `transformer.ts`).
 
+### Phase 10: execution times (for the path analysis)
+
+- New data concept `ExecutionTime` (added to spec 2.2 and 9.1): the time in whole seconds that
+  executing a node takes. It belongs to Activity, ForkActivity and SynchronizedActivity, so
+  `DATA_CONCEPT_OWNERS` now lists several owners per data concept. Routing concepts, Start and
+  End take no time.
+- BPMN 2.0: `Task 2.0` → `ExecutionTime: "Execution Time (s) 2.0"`.
+- `GraphNode.executionTime`: 0 when not given (no error), the number for digits only, null for
+  anything else (e.g. "2.5", "-3"), which check 27 reports.
+- The firing rule stays free of time; the path analysis derives execution time and cycle time
+  from the runs (spec 9.1).
+
 ## Findings of Phase 0 for later phases
 
 These were the open findings of Phase 0; they are answered in the section above, except

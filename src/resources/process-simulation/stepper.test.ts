@@ -12,7 +12,7 @@ import type { NodeConcept } from "./vocabulary";
 // Builders (as in firing.test.ts)
 // ---------------------------------------------------------------------------------
 
-const node = (id: string, concept: NodeConcept): GraphNode => ({ id, label: id, concept, incoming: [], outgoing: [] }); // wired by graph()
+const node = (id: string, concept: NodeConcept): GraphNode => ({ id, label: id, concept, executionTime: 0, incoming: [], outgoing: [] }); // wired by graph()
 const is = (variableName: string, value: string): ConditionRow => ({ variableName, operator: "==", value, logicalOperator: null }); // "variable == value"
 const flow = (id: string, source: string, target: string, ...rows: ConditionRow[]): GraphFlow => ({ id, label: id, source, target, condition: rows });
 const draw = (id: string, at: string, variable: string, entries: [string, number][]): GraphGenerator => ({

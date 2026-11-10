@@ -12,7 +12,8 @@
  *
  * Source: "A Generic Simulation Algorithm Described with Coloured Petri Nets",
  * section 2.1 (element concepts and their meaning) and 2.2 (data concepts), both
- * copied verbatim; section 5.3 (waiting depends on the concept alone); section 7
+ * copied verbatim, with ExecutionTime added to 2.2 for the path analysis (spec 9.1);
+ * section 5.3 (waiting depends on the concept alone); section 7
  * (nodes, sequence flows, variables and random generators play three different roles).
  */
 
@@ -110,17 +111,22 @@ export const DATA_CONCEPTS = [
   "TransitionCondition", // stored as a key in the mapping file, so the spelling must match the spec
   "Distribution", // stored as a key in the mapping file, so the spelling must match the spec
   "VariableName", // stored as a key in the mapping file, so the spelling must match the spec
+  "ExecutionTime", // added for the path analysis (spec 9.1): how long executing a node takes
 ] as const; // `as const` keeps each entry as its own literal type
 
 /** One of the data concepts above. */
 export type DataConcept = (typeof DATA_CONCEPTS)[number]; // derived from the list so the two can never drift apart
 
-/** The element concept each data concept belongs to (spec 2.2, column "Belongs to"). */
+/**
+ * The element concepts each data concept belongs to (spec 2.2, column "Belongs to"). A list,
+ * since ExecutionTime belongs to every concept that counts as an executed activity.
+ */
 export const DATA_CONCEPT_OWNERS = {
-  TransitionCondition: "SequenceFlow", // a condition only makes sense on a flow, where it decides whether the flow is taken
-  Distribution: "RandomGenerator", // the values a generator can draw and how likely each is
-  VariableName: "Variable", // the name conditions use to refer to the variable
-} as const satisfies Readonly<Record<DataConcept, ElementConcept>>; // one owner per data concept, and each owner a real concept
+  TransitionCondition: ["SequenceFlow"], // a condition only makes sense on a flow, where it decides whether the flow is taken
+  Distribution: ["RandomGenerator"], // the values a generator can draw and how likely each is
+  VariableName: ["Variable"], // the name conditions use to refer to the variable
+  ExecutionTime: ["Activity", "ForkActivity", "SynchronizedActivity"], // the executed activities take time; routing concepts, Start and End take none (spec 2.2)
+} as const satisfies Readonly<Record<DataConcept, readonly ElementConcept[]>>; // owners per data concept, and each owner a real concept
 
 /** The meaning of each data concept, word for word from spec 2.2. */
 export const DATA_CONCEPT_MEANINGS: Readonly<Record<DataConcept, string>> = {
@@ -128,4 +134,5 @@ export const DATA_CONCEPT_MEANINGS: Readonly<Record<DataConcept, string>> = {
   TransitionCondition: "The condition under which this flow is taken.", // shown when choosing the condition attribute
   Distribution: "The values that can be drawn and their probabilities.", // shown when choosing the distribution attribute
   VariableName: "The name by which the conditions refer to this variable.", // shown when choosing the name attribute
+  ExecutionTime: "The time, in whole seconds, that executing this element takes.", // as added to spec 2.2
 };

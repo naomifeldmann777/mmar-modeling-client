@@ -41,6 +41,9 @@
  * conditions still refer to variables by name (spec 2.2), and nothing after the transformer
  * knows whether a name was typed or picked.
  *
+ * An ExecutionTime is read as a whole number of seconds; an empty one is 0, anything else
+ * that is not a whole number of 0 or more is kept as null for the validator (check 27).
+ *
  * Source: spec 3 (unmapped elements are ignored), spec 6.2 (a draw belongs to the node at
  * which it occurs, whatever the metamodel looks like), spec 7 (nodes, flows, variables and
  * random generators), plan 4, Plan2 A3 (mapping per class).
@@ -50,10 +53,11 @@ import { NAME_ATTRIBUTE_UUID } from "@/constants";
 import type { ConditionRow, DistributionEntry, SimulationGraph } from "./graph";
 import { resolveConcept, type LanguageMapping } from "./mappings"; // the mapping of the model's language, and the split-or-join rule
 import { parseDecimal } from "./numbers"; // probabilities may be written with a comma or a dot
-import { NODE_CONCEPTS, type DataConcept, type ElementConcept, type NodeConcept } from "./vocabulary";
+import { DATA_CONCEPT_OWNERS, NODE_CONCEPTS, type DataConcept, type ElementConcept, type NodeConcept } from "./vocabulary";
 
 const CONDITION_COLUMNS = ["variable", "operator", "value", "logical operator"]; // the format rule for a TransitionCondition table
 const DISTRIBUTION_COLUMNS = ["value", "probability"]; // the format rule for a Distribution table
+const UNSET_VALUES = ["not defined", "undefined"]; // what older MMAR models hold in an attribute that was never set (NOTES.md, section 4)
 
 /** What the mapping makes of one element of the model. */
 interface MappedElement {
@@ -144,6 +148,16 @@ export function transformModel(
     return attribute === undefined ? null : (attribute?.value ?? "").trim(); // "" is reported by the validator (spec 10, check 10)
   };
 
+  // How long a node takes, in whole seconds (spec 9.1). Examples of the attribute's text:
+  //   "30" -> 30     "" -> 0 (not given)     "2.5", "-3", "abc" -> null (check 27 reports it)
+  // A concept that takes no time (a gateway, Start, End) has 0, whatever its class holds.
+  const executionTimeOf = (nodeId: string, concept: NodeConcept): number | null => {
+    if (!(DATA_CONCEPT_OWNERS.ExecutionTime as readonly ElementConcept[]).includes(concept)) return 0; // e.g. a Decision: routing takes no time
+    const text = (dataOf(nodeId, "ExecutionTime")?.value ?? "").trim(); // "" when the mapping names no time, or the element has none
+    if (text === "" || UNSET_VALUES.includes(text)) return 0; // not given: zero seconds, no error (decided for the path analysis)
+    return /^\d+$/.test(text) ? Number(text) : null; // digits only: a whole number of 0 or more
+  };
+
   // Pass 1: one graph entry per mapped element, chosen by its concept alone.
   for (const [id, entry] of mapped) {
     const element = elements.get(id)!; // `mapped` was built from `elements`, so it is there
@@ -210,7 +224,7 @@ export function transformModel(
         issue(id, `"${label}" is a line, so it cannot be executed as ${entry.concept}.`); // spec 10, check 2: nodes are what flows connect
         continue; // a line as a node could never be reached by a flow
       }
-      graph.nodes[id] = { id, label, concept: entry.concept, incoming: [], outgoing: [] }; // flows are wired in pass 2
+      graph.nodes[id] = { id, label, concept: entry.concept, executionTime: executionTimeOf(id, entry.concept), incoming: [], outgoing: [] }; // flows are wired in pass 2
     } else if (entry.concept === "SequenceFlow") {
       if (!ends) issue(id, `"${label}" is mapped to SequenceFlow but is not a line, so it has no source and target.`); // spec 10, check 2
       const rows = readTable("TransitionCondition", CONDITION_COLUMNS); // null: no condition attribute mapped, or unreadable

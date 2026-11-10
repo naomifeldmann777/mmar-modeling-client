@@ -15,7 +15,7 @@ import type { NodeConcept } from "./vocabulary";
 // Builders
 // ---------------------------------------------------------------------------------
 
-const node = (id: string, concept: NodeConcept): GraphNode => ({ id, label: id, concept, incoming: [], outgoing: [] }); // flows are wired by graph()
+const node = (id: string, concept: NodeConcept): GraphNode => ({ id, label: id, concept, executionTime: 0, incoming: [], outgoing: [] }); // flows are wired by graph()
 const row = (variableName: string, operator: string, value: string, link: string | null = null): ConditionRow => ({ variableName, operator, value, logicalOperator: link }); // one condition row
 const flow = (id: string, source: string | null, target: string | null, ...rows: ConditionRow[]): GraphFlow => ({ id, label: id, source, target, condition: rows }); // [] when no rows: no condition
 const draw = (id: string, at: string, variable: string, entries: [string, number | null][] | null): GraphGenerator => ({
@@ -672,5 +672,13 @@ describe("validateGraph: check 24, a join closes exactly one split", () => {
     const problems = validateGraph(g);
     expect(problems.map((p) => [p.check, p.elementId])).toEqual([[24, "join"]]); // one message, on the shared join
     expect(problems[0].message).toContain("closes the branches of 2 splits, AND-Split \"p1\" and AND-Split \"p2\"");
+  });
+});
+
+describe("validateGraph: check 27 (execution times)", () => {
+  it("reports a node whose execution time could not be read as whole seconds, and only that", () => {
+    const g = modelA();
+    g.nodes.check.executionTime = null; // e.g. "2.5" typed into Check stock's time
+    expect(validateGraph(g).map((p) => [p.check, p.elementId])).toEqual([[27, "check"]]); // one message, on the node
   });
 });

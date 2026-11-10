@@ -38,6 +38,10 @@ export interface GraphNode {
   id: string; // uuid of the element
   label: string; // its name, so messages and the trace can name it
   concept: NodeConcept; // decides how it is executed, and whether it waits (spec 5.3)
+  // How long executing it takes, in whole seconds (ExecutionTime, spec 9.1). 0 when no time is
+  // given or its concept takes none; null when one is given but is not a whole number of 0 or
+  // more, which the validator reports (check 27).
+  executionTime: number | null;
   incoming: string[]; // ids of the flows leading into it: the tokens it can consume
   outgoing: string[]; // ids of the flows leading out of it: where it can produce tokens
 }

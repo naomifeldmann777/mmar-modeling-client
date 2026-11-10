@@ -69,7 +69,10 @@ export const MAPPINGS: Readonly<Record<string, LanguageMapping>> = {
   "BPMN 2.0": { // CHECK: THE NAME OF THE SCENE TYPE (METAMODEL) AS THE METAMODELING CLIENT SHOWS IT
     "Start Event 2.0": { concept: "Start" }, // CHECK: CLASS NAME
     "End Event 2.0": { concept: "End" }, // CHECK: CLASS NAME
-    "Task 2.0": { concept: "Activity" }, // CHECK: CLASS NAME
+    "Task 2.0": {
+      concept: "Activity", // CHECK: CLASS NAME (the key above)
+      data: { ExecutionTime: "Execution Time (s) 2.0" }, // CHECK: ATTRIBUTE NAME of the time in whole seconds
+    },
     "Exclusive Gateway 2.0": { concept: "Decision" }, // CHECK: CLASS NAME. A Decision both to split and to merge, see the header
     "Parallel Gateway 2.0": { concept: { split: "AND-Split", join: "AND-Join" } }, // CHECK: CLASS NAME. Role by its incoming flows, see the header
     "Inclusive Gateway 2.0": { concept: { split: "OR-Split", join: "OR-Join" } }, // CHECK: CLASS NAME. Role by its incoming flows, see the header

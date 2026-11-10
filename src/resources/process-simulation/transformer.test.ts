@@ -20,13 +20,14 @@ import type { LanguageMapping } from "./mappings";
 
 const column = (uuid: string, sequence: number) => ({ attribute: { uuid, name: uuid }, sequence }); // a table column as the metamodel defines it
 const nameAttribute = { uuid: NAME_ATTRIBUTE_UUID, name: "Name", attribute_type: { has_table_attribute: [] } }; // the standard Name attribute, no table
+const timeAttribute = { uuid: "m-time", name: "Time", attribute_type: { has_table_attribute: [] } }; // a task's execution time in seconds
 const CONDITION = ["c-variable", "c-operator", "c-value", "c-logical"]; // the condition columns, in the order of the format rule
 const DISTRIBUTION = ["d-value", "d-probability"]; // the distribution columns, in the order of the format rule
 
 const BOX_CLASSES = ["Start", "Task", "XOR", "AND", "End", "Var", "Note", "Kink"]; // one metaclass per kind of box; "Note" and "Kink" are not mapped
 const sceneType = {
   name: "Test language", // named in messages about the mapping
-  classes: BOX_CLASSES.map((name) => ({ uuid: `m-${name}`, name, attributes: [nameAttribute] })), // e.g. { uuid: "m-Task", name: "Task" }
+  classes: BOX_CLASSES.map((name) => ({ uuid: `m-${name}`, name, attributes: name === "Task" ? [nameAttribute, timeAttribute] : [nameAttribute] })), // e.g. { uuid: "m-Task", name: "Task" }; only a Task has a time
   relationclasses: [
     {
       uuid: "m-flow", // the line mapped to SequenceFlow
@@ -44,7 +45,7 @@ const sceneType = {
 /** The mapping of the test language, by class name, as mappings.ts writes one. */
 const MAPPING: LanguageMapping = {
   Start: { concept: "Start" },
-  Task: { concept: "Activity" },
+  Task: { concept: "Activity", data: { ExecutionTime: "Time" } },
   XOR: { concept: "Decision" },
   AND: { concept: { split: "AND-Split", join: "AND-Join" } }, // the role follows from the incoming flows
   End: { concept: "End" },
@@ -69,8 +70,12 @@ const table = (uuid: string, uuidAttribute: string, columns: string[], rows: str
     .reverse(), // stored out of order on purpose
 });
 
-/** A box of metaclass `className` ("Task", "XOR", ...). */
-const box = (id: string, className: string, label: string) => ({ uuid: id, uuid_class: `m-${className}`, attribute_instance: [name(id, label)] });
+/** A box of metaclass `className` ("Task", "XOR", ...), with the text of its time attribute if `time` is given. */
+const box = (id: string, className: string, label: string, time?: string) => ({
+  uuid: id, // the element's uuid
+  uuid_class: `m-${className}`, // its metaclass, which the mapping names
+  attribute_instance: [name(id, label), ...(time === undefined ? [] : [{ uuid: `${id}-time`, uuid_attribute: "m-time", value: time, table_attributes: [] }])], // its Name, and its time if it has one
+});
 
 /** A line from `from` to `to`, with its tables. */
 const line = (id: string, metaclass: string, from: string, to: string, tables: object[] = []) => ({
@@ -123,11 +128,11 @@ describe("transformModel: test model A (draw and decision)", () => {
   it("builds the expected graph", () => {
     expect(transformModel(sceneType, model, MAPPING)).toEqual({
       nodes: {
-        start: { id: "start", label: "Start", concept: "Start", incoming: [], outgoing: ["f1"] },
-        check: { id: "check", label: "Check stock", concept: "Activity", incoming: ["f1"], outgoing: ["f2"] },
-        dec: { id: "dec", label: "lager?", concept: "Decision", incoming: ["f2"], outgoing: ["f3", "f4"] },
-        endja: { id: "endja", label: "End ja", concept: "End", incoming: ["f3"], outgoing: [] },
-        endnein: { id: "endnein", label: "End nein", concept: "End", incoming: ["f4"], outgoing: [] },
+        start: { id: "start", label: "Start", concept: "Start", executionTime: 0, incoming: [], outgoing: ["f1"] },
+        check: { id: "check", label: "Check stock", concept: "Activity", executionTime: 0, incoming: ["f1"], outgoing: ["f2"] },
+        dec: { id: "dec", label: "lager?", concept: "Decision", executionTime: 0, incoming: ["f2"], outgoing: ["f3", "f4"] },
+        endja: { id: "endja", label: "End ja", concept: "End", executionTime: 0, incoming: ["f3"], outgoing: [] },
+        endnein: { id: "endnein", label: "End nein", concept: "End", executionTime: 0, incoming: ["f4"], outgoing: [] },
       },
       flows: {
         f1: { id: "f1", label: "Name", source: "start", target: "check", condition: [] }, // the default row is skipped
@@ -190,6 +195,18 @@ describe("transformModel: concepts from the classes", () => {
 });
 
 describe("transformModel: data", () => {
+  it("reads a task's execution time in whole seconds: empty is 0, anything else unreadable is null", () => {
+    const model = scene([box("a", "Task", "A", "30"), box("b", "Task", "B", ""), box("c", "Task", "C"), box("d", "Task", "D", "2.5"), box("e", "Task", "E", "-3")], []);
+    const times = Object.fromEntries(Object.values(transformModel(sceneType, model, MAPPING).nodes).map((node) => [node.id, node.executionTime]));
+    expect(times).toEqual({ a: 30, b: 0, c: 0, d: null, e: null }); // c has no instance of the attribute; d and e are reported by check 27
+  });
+
+  it("gives a concept that takes no time 0, whatever its class holds", () => {
+    const mapping: LanguageMapping = { ...MAPPING, Task: { concept: "Decision", data: { ExecutionTime: "Time" } } }; // a time named on a routing concept by mistake
+    const graph = transformModel(sceneType, scene([box("t", "Task", "T", "30")], []), mapping);
+    expect(graph.nodes.t.executionTime).toBe(0); // routing takes no time (spec 2.2)
+  });
+
   it("gives a flow the condition null when the mapping names no condition attribute", () => {
     const mapping: LanguageMapping = { ...MAPPING, Flow: { concept: "SequenceFlow" } }; // no TransitionCondition named
     const graph = transformModel(sceneType, scene([box("a", "Task", "A"), box("b", "Task", "B")], [flow("f", "a", "b", ["x", "==", "1", "-"])]), mapping);

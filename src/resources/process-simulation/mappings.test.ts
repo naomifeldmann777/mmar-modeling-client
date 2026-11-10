@@ -44,10 +44,11 @@ describe("MAPPINGS", () => {
     }
   });
 
-  it("gives a data concept only to a class of the concept it belongs to (spec 2.2)", () => {
+  it("gives a data concept only to a class of a concept it belongs to (spec 2.2)", () => {
     for (const [className, { concept, data }] of entries) {
+      const concepts = typeof concept === "string" ? [concept] : [concept.split, concept.join]; // every role the class can play
       for (const dataConcept of Object.keys(data ?? {}) as DataConcept[]) {
-        expect(DATA_CONCEPT_OWNERS[dataConcept], className).toBe(concept); // e.g. TransitionCondition only on SequenceFlow
+        for (const each of concepts) expect(DATA_CONCEPT_OWNERS[dataConcept], className).toContain(each); // e.g. TransitionCondition only on SequenceFlow
       }
     }
   });
