@@ -71,10 +71,10 @@ describe("processSimulationStore", () => {
   });
 
   it("opens with a message when no graph could be built", () => {
-    state().openWithMessage("scene-1", "The stored concept mapping could not be read.");
+    state().openWithMessage("scene-1", "The process simulation has no mapping for this metamodel.");
     expect(state().active).toBe(true);
     expect(state().run).toBeNull();
-    expect(state().message).toBe("The stored concept mapping could not be read.");
+    expect(state().message).toBe("The process simulation has no mapping for this metamodel.");
   });
 
   it("closes completely on 'Stop simulation'", () => {

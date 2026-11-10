@@ -94,6 +94,6 @@ export interface GraphVariable {
 
 /** Something the transformer could not translate, reported against the element it concerns. */
 export interface GraphIssue {
-  elementId: string; // uuid of the element, so the problem can be shown on it
+  elementId: string | null; // uuid of the element, so the problem can be shown on it; null when it concerns no element, e.g. a class the mapping names but the metamodel lacks
   message: string; // for the user: names what is wrong, not a structure of this code
 }

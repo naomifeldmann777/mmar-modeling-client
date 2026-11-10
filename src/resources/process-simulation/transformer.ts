@@ -1,26 +1,26 @@
 /**
- * The transformer: turns an MMAR model and its concept mapping into the simulation
- * graph (graph.ts), the plain data every later step works on.
+ * The transformer: turns an MMAR model and the mapping of its modelling language into the
+ * simulation graph (graph.ts), the plain data every later step works on.
  *
- * Used by: the stepper (and later the path analysis), once per run, before the
- * validator. It is the MMAR adapter of the simulation: the one place that knows how MMAR
- * stores a model (instances, attribute instances, table cells, relations with roles).
+ * Used by: the stepper (and later the path analysis), once per run, before the validator.
+ * It is the MMAR adapter of the simulation: the one place that knows how MMAR stores a
+ * model (instances, metaclasses, attribute instances, table cells, relations with roles).
+ * So when a run starts: mappingFor(scene type name) → transformModel → startRun.
  *
- * It offers two functions, both reading the MMAR model:
- * - readMappableModel: the list of the model's elements and their attributes, which
- *   loadMapping (mapping.ts) needs to check a stored mapping. Used by the mapping popup and
- *   the stepper panel, each before loading the mapping.
- * - transformModel: the simulation graph, built from the model and the checked mapping.
- * So when a run starts: readMappableModel → loadMapping → transformModel → startRun.
+ * How an element gets its concept (Plan2 A3): from the mapping of its METACLASS, looked up
+ * by the metaclass's name (mappings.ts). A class with two roles (e.g. a Parallel Gateway)
+ * becomes a join where several sequence flows lead into the element, a split otherwise
+ * (resolveConcept). A data concept is the element's attribute instance of the meta
+ * attribute the mapping names for its class.
  *
  * Deliberately NOT here:
  * - Nothing of a modelling language. No metaclass name, no attribute name and no uuid of a
- *   metamodel appears in this file: what an element is comes from the mapping, never from
- *   its metaclass, so BPMN and Petri net models go through the same code.
+ *   metamodel appears in this file: they all come from the mapping, so BPMN and Petri net
+ *   models go through the same code.
  * - No judgement about the process. Missing names, empty conditions or an unreadable
  *   probability are written into the graph as they are; the validator decides whether
  *   they prevent a run (plan 4). Only what cannot be translated at all becomes an issue.
- * - Elements without a concept are skipped (spec 3).
+ * - Elements of a class the mapping does not name are skipped (spec 3), bendpoints included.
  *
  * The format rule for data held in tables (decided in Phase 4): the attribute mapped as
  *   TransitionCondition is a table whose columns are, in this order:
@@ -37,72 +37,44 @@
  * read as the CURRENT name of the element it points at, provided that element is mapped to
  * Variable; the text MMAR stored in the cell is the name at the time it was chosen and goes
  * stale when the variable is renamed. A reference to an element of another model (the
- * reference dialog offers the variables of every loaded model) becomes an issue. So conditions still refer to variables by name (spec
- * 2.2), and nothing after the transformer knows whether a name was typed or picked.
+ * reference dialog offers the variables of every loaded model) becomes an issue. So
+ * conditions still refer to variables by name (spec 2.2), and nothing after the transformer
+ * knows whether a name was typed or picked.
  *
- * Source: spec 3 (mapping per element; unmapped elements are ignored), spec 6.2 (a draw
- * belongs to the node at which it occurs, whatever the metamodel looks like), spec 7
- * (nodes, flows, variables and random generators), plan 4.
+ * Source: spec 3 (unmapped elements are ignored), spec 6.2 (a draw belongs to the node at
+ * which it occurs, whatever the metamodel looks like), spec 7 (nodes, flows, variables and
+ * random generators), plan 4, Plan2 A3 (mapping per class).
  */
 import { table_rows, type Attribute, type AttributeInstance, type ClassInstance, type SceneInstance, type SceneType } from "@gds";
 import { NAME_ATTRIBUTE_UUID } from "@/constants";
 import type { ConditionRow, DistributionEntry, SimulationGraph } from "./graph";
-import type { MappableModel, ProcessSimulationMapping } from "./mapping"; // the list readMappableModel fills in, and the mapping transformModel reads
+import { resolveConcept, type LanguageMapping } from "./mappings"; // the mapping of the model's language, and the split-or-join rule
 import { parseDecimal } from "./numbers"; // probabilities may be written with a comma or a dot
 import { NODE_CONCEPTS, type DataConcept, type ElementConcept, type NodeConcept } from "./vocabulary";
 
 const CONDITION_COLUMNS = ["variable", "operator", "value", "logical operator"]; // the format rule for a TransitionCondition table
 const DISTRIBUTION_COLUMNS = ["value", "probability"]; // the format rule for a Distribution table
 
-/**
- * The model's elements, each with the uuids of its own attribute instances: the list that
- * loadMapping and readMapping (mapping.ts) check a mapping against.
- *
- * Why it is needed: the mapping is stored in the browser and may be older than the model.
- * Since it was saved, an element may have been deleted, or the attribute chosen as its data
- * (e.g. its condition table) may be gone. So before a stored mapping is used, loadMapping
- * compares it with this list and drops what no longer fits. mapping.ts belongs to the
- * library and must not read the MMAR model itself; this function hands it what it needs as
- * a plain list.
- *
- * Why it is here: to fill the list, the MMAR model has to be read (class instances, relation
- * instances, bendpoints, attribute instances), and this file is the one place that reads it.
- * It used to be part of the mapping popup; it moved here when the stepper panel needed the
- * same list, so both call this one function instead of keeping two copies.
- *
- * Example: a model with the task "Check stock" (attribute: Name) and a sequence flow (Name,
- * condition table) gives
- *   { sceneInstanceId: "scene-1", elementAttributes: { "check-stock": ["a1"], "flow-1": ["a2", "a3"] } }
- *
- * Bendpoints are left out: MMAR stores every kink of a line as a class instance of its own,
- * which is not a model element anyone would map (the model tree hides them too).
- */
-export function readMappableModel(sceneType: SceneType, sceneInstance: SceneInstance): MappableModel {
-  const bendpointClasses = new Set(sceneType.relationclasses.map((relationclass) => relationclass.bendpoint)); // each relation class names the class of its kinks; undefined when its lines have none
-  const elements: ClassInstance[] = [
-    ...sceneInstance.class_instances.filter((instance) => !bendpointClasses.has(instance.uuid_class)), // the boxes, without the kinks
-    ...sceneInstance.relationclasses_instances, // the lines: a relation instance is a class instance too
-  ];
-  return {
-    sceneInstanceId: sceneInstance.uuid, // a mapping of another model is refused against this
-    elementAttributes: Object.fromEntries(elements.map((element) => [element.uuid, (element.attribute_instance ?? []).map((attribute) => attribute.uuid)])), // element uuid -> its attribute instance uuids
-  };
+/** What the mapping makes of one element of the model. */
+interface MappedElement {
+  concept: ElementConcept; // its concept, with the role of a split-or-join class already settled
+  data: Partial<Record<DataConcept, string>>; // data concept -> uuid of the META attribute that holds it, found by the name the mapping gives
 }
 
 /**
  * Builds the simulation graph of a model.
  *
- * `sceneType` is the model's metamodel: it is needed for the order of a table's columns,
- * which a cell does not know itself. `mapping` must come from loadMapping (mapping.ts),
- * which has already dropped every entry for an element or attribute the model lacks.
+ * `sceneType` is the model's metamodel: it gives every element's metaclass and its name, the
+ * meta attributes the mapping names, and the order of a table's columns, which a cell does
+ * not know itself. `mapping` is the mapping of that metamodel (mappingFor in mappings.ts).
  */
 export function transformModel(
-  sceneType: SceneType, // the metamodel, for the column order of tables
+  sceneType: SceneType, // the metamodel
   sceneInstance: SceneInstance, // the model
-  mapping: ProcessSimulationMapping, // which element plays which concept
+  mapping: LanguageMapping, // which class plays which concept
 ): SimulationGraph {
   const graph: SimulationGraph = { nodes: {}, flows: {}, generators: {}, variables: {}, issues: [] }; // filled below
-  const issue = (elementId: string, message: string) => graph.issues.push({ elementId, message }); // one way to record a problem
+  const issue = (elementId: string | null, message: string) => graph.issues.push({ elementId, message }); // one way to record a problem
 
   // Lookup tables, built once: element uuid -> element, relation uuid -> relation, meta attribute uuid -> meta attribute.
   const relations = new Map(sceneInstance.relationclasses_instances.map((relation) => [relation.uuid, relation])); // the lines of the model
@@ -110,58 +82,102 @@ export function transformModel(
     ...sceneInstance.class_instances.map((instance) => [instance.uuid, instance] as const), // boxes
     ...relations, // and lines: a relation instance is a class instance too
   ]);
+  const metaclasses = [...sceneType.classes, ...sceneType.relationclasses]; // boxes and lines of the metamodel alike: the mapping names both
   const metaAttributes = new Map<string, Attribute>(
-    [...sceneType.classes, ...sceneType.relationclasses].flatMap((metaclass) => metaclass.attributes.map((attribute) => [attribute.uuid, attribute] as const)), // a table's columns are on its meta attribute
+    metaclasses.flatMap((metaclass) => metaclass.attributes.map((attribute) => [attribute.uuid, attribute] as const)), // a table's columns are on its meta attribute
   );
-  const conceptOf = (id: string | null) => (id ? mapping.elements[id]?.concept : undefined); // the concept of a connected element, if it has one
 
-  // The name conditions use for a variable: the text of the attribute mapped as its
-  // VariableName, trimmed so " lager" and "lager" are the same name. null when no such
-  // attribute is mapped (spec 10, check 3 reports that). Read from the model, not from
-  // graph.variables, so it does not matter whether pass 1 has reached the variable yet.
+  // Step 1: the mapping of every metaclass, by uuid, with the data attributes found by name.
+  // Example: "Sequence Flow 2.0" maps TransitionCondition to "Transition Condition Table 2.0";
+  // its meta attribute of that name has the uuid "m-condition", so a flow's condition is its
+  // attribute instance of "m-condition". A name the metamodel lacks is a mistake in the
+  // mapping (e.g. a typo, or a class renamed since), reported once, not per element.
+  const classMappings = new Map<string, { concept: LanguageMapping[string]["concept"]; data: Partial<Record<DataConcept, string>> }>(); // metaclass uuid -> its mapping
+  for (const [className, classMapping] of Object.entries(mapping)) {
+    const metaclass = metaclasses.find((candidate) => candidate.name === className); // the class the mapping means
+    if (!metaclass) {
+      issue(null, `The simulation mapping names the class "${className}", which the metamodel "${sceneType.name}" does not have.`); // spec 10, check 2
+      continue; // no element can be of a class that does not exist
+    }
+    const data: Partial<Record<DataConcept, string>> = {}; // the data attributes of this class that exist
+    for (const [dataConcept, attributeName] of Object.entries(classMapping.data ?? {}) as [DataConcept, string][]) {
+      const attribute = metaclass.attributes.find((candidate) => candidate.name === attributeName); // the meta attribute the mapping means
+      if (attribute) data[dataConcept] = attribute.uuid; // found: read from every element of the class
+      else issue(null, `The simulation mapping names the attribute "${attributeName}" of "${className}" as its ${dataConcept}, but the class has no such attribute.`); // spec 10, check 2
+    }
+    classMappings.set(metaclass.uuid, { concept: classMapping.concept, data }); // relation instances carry their relation class in uuid_class too
+  }
+
+  // Step 2: how many sequence flows lead into each element, which settles the role of a
+  // split-or-join class. A line's own concept never depends on flows, so it is known here.
+  const incomingFlows = new Map<string, number>(); // element uuid -> number of incoming sequence flows
+  for (const relation of relations.values()) {
+    const target = relation.role_instance_to?.uuid_has_reference_class_instance; // the element the line leads to
+    if (target && classMappings.get(relation.uuid_class)?.concept === "SequenceFlow") incomingFlows.set(target, (incomingFlows.get(target) ?? 0) + 1); // count only sequence flows, not e.g. random generators
+  }
+
+  // Step 3: the concept and data of every element whose class is mapped. Example: a
+  // Parallel Gateway with two incoming sequence flows -> { concept: "AND-Join", data: {} }.
+  const mapped = new Map<string, MappedElement>(); // element uuid -> what it plays
+  for (const element of elements.values()) {
+    const classMapping = classMappings.get(element.uuid_class); // undefined for a class the mapping does not name, e.g. a bendpoint
+    if (classMapping) mapped.set(element.uuid, { concept: resolveConcept(classMapping.concept, incomingFlows.get(element.uuid) ?? 0), data: classMapping.data });
+  }
+  const conceptOf = (id: string | null) => (id ? mapped.get(id)?.concept : undefined); // the concept of a connected element, if it has one
+
+  // The element's attribute instance holding `dataConcept`. undefined: the mapping names no
+  // attribute for it (spec 10, check 3 decides whether that matters). null: the mapping
+  // names one, but this element has no instance of it, e.g. it was drawn before the
+  // attribute was added to the metamodel; it is then read as empty.
+  const dataOf = (elementId: string, dataConcept: DataConcept): AttributeInstance | null | undefined => {
+    const metaAttributeId = mapped.get(elementId)?.data[dataConcept]; // which meta attribute holds it
+    if (metaAttributeId === undefined) return undefined; // not mapped
+    return elements.get(elementId)?.attribute_instance?.find((candidate) => candidate.uuid_attribute === metaAttributeId) ?? null; // the element's own instance of it
+  };
+
+  // The name conditions use for a variable: the text of its VariableName attribute, trimmed
+  // so " lager" and "lager" are the same name. null when the mapping names no such attribute
+  // (spec 10, check 3 reports that). Read from the model, not from graph.variables, so it
+  // does not matter whether pass 1 has reached the variable yet.
   const variableNameOf = (variableId: string): string | null => {
-    const attributeId = mapping.elements[variableId]?.data?.VariableName; // the attribute holding the name
-    const attribute = attributeId === undefined ? undefined : elements.get(variableId)?.attribute_instance?.find((candidate) => candidate.uuid === attributeId); // that attribute; loadMapping has checked it belongs to the element
-    return attribute ? (attribute.value ?? "").trim() : null; // "" is reported by the validator (spec 10, check 10)
+    const attribute = dataOf(variableId, "VariableName"); // the attribute holding the name
+    return attribute === undefined ? null : (attribute?.value ?? "").trim(); // "" is reported by the validator (spec 10, check 10)
   };
 
   // Pass 1: one graph entry per mapped element, chosen by its concept alone.
-  for (const [id, entry] of Object.entries(mapping.elements)) {
-    const element = elements.get(id); // the model element behind the entry
-    if (!element) continue; // cannot happen: loadMapping has already dropped entries of deleted elements
+  for (const [id, entry] of mapped) {
+    const element = elements.get(id)!; // `mapped` was built from `elements`, so it is there
     const label = nameOf(element); // for messages and the trace
     const relation = relations.get(id); // undefined when the element is a box, not a line
     const ends = relation
       ? [relation.role_instance_from?.uuid_has_reference_class_instance ?? null, relation.role_instance_to?.uuid_has_reference_class_instance ?? null] // a line's two ends, through its roles; null for an end that is no element (e.g. a port)
       : null; // a box has no ends
 
-    // Reads the table attribute the user mapped as `dataConcept` (TransitionCondition or
+    // Reads the table attribute the mapping names as `dataConcept` (TransitionCondition or
     // Distribution) and returns its content as plain text: one array per row, holding the
     // cell texts in column order. Example, a condition table with two rows:
     //
     //   [ ["lager", "==", "ja",      "-"  ],
     //     ["kunde", "==", "premium", "AND"] ]
     //
-    // Returns null when no attribute is mapped for this data concept (not an error here: the
-    // validator decides whether it is needed, spec 10, check 3), and null with an issue when
-    // the chosen attribute is not a table with enough columns: the popup offers every
-    // attribute of the element, so the user may have picked e.g. "Name" by mistake.
+    // Returns null when the mapping names no attribute for this data concept (not an error
+    // here: the validator decides whether it is needed, spec 10, check 3), and null with an
+    // issue when the named attribute is not a table with enough columns.
     const readTable = (dataConcept: DataConcept, columnNames: string[]): string[][] | null => {
-      const attributeId = entry.data?.[dataConcept]; // which attribute the user chose in the popup
-      if (attributeId === undefined) return null; // nothing chosen
-      const attribute = element.attribute_instance?.find((candidate) => candidate.uuid === attributeId); // the element's own attribute instance
-      if (!attribute) return null; // cannot happen: loadMapping has already checked that the attribute belongs to the element
+      const attribute = dataOf(id, dataConcept); // the element's table, null if it has none yet
+      if (attribute === undefined) return null; // the mapping names nothing
 
       // MMAR stores a table as ONE flat list of cells (attribute.table_attributes), in no fixed
       // order. A cell only knows its row (`table_row`), its column (`uuid_attribute`, the uuid of
       // the column's meta attribute) and its text (`value`). The ORDER of the columns is not in
       // the cells but in the metamodel: the table's meta attribute lists its columns, each with
       // a `sequence` number (1, 2, 3, ...).
-      const columns = metaAttributes.get(attribute.uuid_attribute)?.attribute_type?.has_table_attribute ?? []; // the columns, from the metamodel
+      const columns = metaAttributes.get(entry.data[dataConcept]!)?.attribute_type?.has_table_attribute ?? []; // the columns, from the metamodel; `!` because dataOf found the data concept mapped
       if (columns.length < columnNames.length) {
         issue(id, `${dataConcept} of "${label}" must be a table with the columns ${columnNames.join(", ")}, in this order.`); // the format rule
         return null; // unreadable
       }
+      if (attribute === null) return []; // no instance of the table yet: read as an empty table
 
       // table_rows (a helper of the shared data structure, Instance_tables.ts) sorts the
       // columns by `sequence` and puts every cell at its place, which turns the flat list into
@@ -293,7 +309,7 @@ function isNodeConcept(concept: ElementConcept | undefined): concept is NodeConc
   return (NODE_CONCEPTS as readonly (ElementConcept | undefined)[]).includes(concept); // widened so undefined can be looked up
 }
 
-/** An element's name: its standard Name attribute, as in the model tree and the mapping popup. */
+/** An element's name: its standard Name attribute, as in the model tree. */
 function nameOf(element: ClassInstance): string {
   return element.attribute_instance?.find((attribute) => attribute.uuid_attribute === NAME_ATTRIBUTE_UUID)?.value || "(unnamed)"; // never blank in a message
 }

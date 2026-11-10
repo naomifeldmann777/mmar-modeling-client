@@ -8,12 +8,10 @@ import type { ValidationProblem } from "@/resources/process-simulation/validator
  * processSimulationStore — the state of the process-simulation stepper while it is open
  * (plan Phase 8).
  *
- * Why a store, while the concept mapping lives in localStorage: the mapping must survive a
- * reload and is read once, when the popup opens or a run starts. A run is the opposite: it
- * only lives while the stepper is open, must NOT survive a reload (the model may have changed
- * by then), and many parts of the client follow it at the same time: the stepper panel, the
- * highlighting in the 3D model and the right column (stepper panel instead of attribute
- * window). A Zustand store tells all of them at once when the run changes.
+ * Why a store: a run only lives while the stepper is open, must NOT survive a reload (the
+ * model may have changed by then), and many parts of the client follow it at the same time:
+ * the stepper panel, the highlighting in the 3D model and the right column (stepper panel
+ * instead of attribute window). A Zustand store tells all of them at once when the run changes.
  *
  * Who writes it: `stepper-session.ts` (views/process-simulation) reads the open model, builds
  * the graph and calls `open`; the stepper panel calls `pick`, `restart` and `close`. Everyone
@@ -29,7 +27,7 @@ interface ProcessSimulationState {
   sceneInstanceId: string | null; // the model the stepper was opened on, to notice a tab change
   run: Run | null; // the current run; null while the stepper is closed or the run could not start
   problems: ValidationProblem[]; // why the run could not start (spec 8, step 1); empty otherwise
-  message: string | null; // a problem before the validator, e.g. the stored mapping could not be read
+  message: string | null; // a problem before the validator, e.g. the model's metamodel has no mapping
 
   /** Opens the stepper on `graph`: runs the validator and starts the run, or keeps the problems. */
   open: (sceneInstanceId: string, graph: SimulationGraph) => void;

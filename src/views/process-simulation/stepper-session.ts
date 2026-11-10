@@ -3,8 +3,8 @@
  *
  * Who calls what:
  * - The menu entry "Process Simulation → Stepper" calls `startStepper`. It reads the open
- *   model, loads and checks the stored mapping, builds the graph and hands it to the store,
- *   whose `open` runs the validator and starts the run. Then it puts the client into
+ *   model, picks the mapping of its scene type (mappings.ts), builds the graph and hands it
+ *   to the store, whose `open` runs the validator and starts the run. Then it puts the client into
  *   ProcessSimulationMode, as the Simulation menu puts it into SimulationMode.
  * - The stepper panel calls `stopStepper` ("Stop simulation"). It closes the store and goes
  *   back to ViewMode.
@@ -36,8 +36,8 @@ import { globalObject, globalStateObject } from "@/engine"; // the open tabs and
 import { eventBus, type Subscription } from "@/resources/services/event-bus"; // tab changes and model changes
 import { useStateStore } from "@/resources/store/stateStore"; // the active mode, to notice when the user leaves ProcessSimulationMode
 import { logger } from "@/resources/services/logger"; // "error" shows the message in the snackbar
-import { loadMapping } from "@/resources/process-simulation/mapping"; // the stored mapping, checked against the model
-import { readMappableModel, transformModel } from "@/resources/process-simulation/transformer"; // the model's element list, and the graph
+import { mappingFor } from "@/resources/process-simulation/mappings"; // the mapping of the model's language, by the name of its scene type
+import { transformModel } from "@/resources/process-simulation/transformer"; // model + mapping -> graph
 import { useProcessSimulationStore } from "@/resources/store/processSimulationStore"; // the run, shared with the panel and the highlighting
 
 const PROCESS_SIMULATION_MODE = 5; // the mode numbers of the client (engine/global-state-object): the stepper's own mode
@@ -57,11 +57,11 @@ export function startStepper(): void {
 
   const sceneInstanceId = tab.sceneInstance.uuid; // the model the run belongs to
   const tabIndex = globalObject.selectedTab; // and the tab it is open in: other users' changes name the tab
-  const loaded = loadMapping(readMappableModel(tab.sceneType, tab.sceneInstance), window.localStorage); // the stored mapping, without entries for deleted elements or attributes
-  if (loaded.ok) {
-    useProcessSimulationStore.getState().open(sceneInstanceId, transformModel(tab.sceneType, tab.sceneInstance, loaded.mapping)); // the validator runs in there: the run, or the problems
+  const mapping = mappingFor(tab.sceneType.name); // e.g. the mapping of "BPMN 2.0"; null for a language the simulation does not know
+  if (mapping) {
+    useProcessSimulationStore.getState().open(sceneInstanceId, transformModel(tab.sceneType, tab.sceneInstance, mapping)); // the validator runs in there: the run, or the problems
   } else {
-    useProcessSimulationStore.getState().openWithMessage(sceneInstanceId, `The stored concept mapping could not be read: ${loaded.reason} Check it under "Concept Mapping…".`); // no graph without a mapping
+    useProcessSimulationStore.getState().openWithMessage(sceneInstanceId, `The process simulation has no mapping for the metamodel "${tab.sceneType.name}", so it cannot simulate this model.`); // no graph without a mapping
   }
 
   globalStateObject.setState(PROCESS_SIMULATION_MODE); // look only: the mode is not editable

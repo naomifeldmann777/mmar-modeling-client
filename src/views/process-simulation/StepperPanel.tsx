@@ -56,7 +56,7 @@ export default function StepperPanel() {
       {message && <Alert severity="error">{message}</Alert>}
       {problems.length > 0 && (
         <Alert severity="error">
-          The run cannot start. Stop the simulation, correct these problems in the model or the concept mapping, and start again:
+          The run cannot start. Stop the simulation, correct these problems in the model, and start again:
           <Box component="ul" sx={{ m: 0, pl: 2 }}>
             {problems.map((problem, index) => (
               <li key={index}>

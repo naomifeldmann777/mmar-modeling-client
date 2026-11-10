@@ -124,12 +124,12 @@ function buildMenus(openDialog: (name: DialogName) => void): MenuDef[] {
     },
     // The generic process simulation, kept apart from the Simulation menu above: that one
     // runs simulation code stored in a metamodel (Petri net, robot), this one works on any
-    // model through the concept mapping. The path analysis is added here later.
+    // model whose language has a mapping (process-simulation/mappings.ts). The path analysis
+    // is added here later.
     {
       name: "Process Simulation",
       icon: "account_tree", // a process shape, distinct from the Simulation menu's play icon
       items: [
-        { label: "Concept Mapping…", icon: "schema", dialog: "processSimulationMapping" }, // the mapping comes first: nothing runs without it
         { label: "Stepper", icon: "skip_next", onSelect: startStepper }, // one run, step by step; the panel appears in the right column
       ],
     },

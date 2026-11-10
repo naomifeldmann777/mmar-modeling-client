@@ -117,14 +117,6 @@ describe("TopNavBar", () => {
     expect(mocks.globalStateObject.setState).not.toHaveBeenCalled();
   });
 
-  it("opens the concept-mapping popup from the Process Simulation menu", () => {
-    render(<TopNavBar />); // the menu bar as the user sees it
-    fireEvent.click(screen.getByRole("button", { name: "Process Simulation" })); // open the new menu
-    fireEvent.click(screen.getByText("Concept Mapping…")); // its first entry
-    expect(useUiStore.getState().dialogs.processSimulationMapping).toBe(true); // the popup opens through uiStore
-    expect(mocks.globalStateObject.setState).not.toHaveBeenCalled(); // and the interaction mode is left alone
-  });
-
   it("starts the stepper from the Process Simulation menu", () => {
     render(<TopNavBar />);
     fireEvent.click(screen.getByRole("button", { name: "Process Simulation" }));

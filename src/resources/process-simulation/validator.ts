@@ -102,10 +102,10 @@ export function validateGraph(graph: SimulationGraph): ValidationProblem[] {
     flows: Object.values(graph.flows),
     generators: Object.values(graph.generators),
     variables: Object.values(graph.variables),
-    withIssue: new Set(graph.issues.map((issue) => issue.elementId)), // already reported by the transformer
+    withIssue: new Set(graph.issues.flatMap((issue) => (issue.elementId ? [issue.elementId] : []))), // already reported by the transformer; an issue on no element (e.g. a class the mapping names wrongly) excuses no element
     report: (check, elementId, message) => problems.push({ severity: "error", check, message, elementId }), // every failed check is an error (Phase 5)
     labelOf, // shared by all messages
-    describeFlow: (flow) => `sequence flow "${flow.label}" (${labelOf(flow.source)} → ${labelOf(flow.target)})`, // as in the mapping popup
+    describeFlow: (flow) => `sequence flow "${flow.label}" (${labelOf(flow.source)} → ${labelOf(flow.target)})`, // flows are rarely named, so their ends say which one is meant
   };
 
   checkMapping(context); // checks 1 to 3
@@ -140,16 +140,16 @@ function checkMapping({ graph, flows, generators, variables, nodes, withIssue, r
   // Check 3: where a concept carries a data concept, the attribute is assigned too.
   for (const generator of generators) {
     if (generator.distribution === null && !withIssue.has(generator.id)) {
-      report(3, generator.id, `Random generator "${generator.label}" has no Distribution assigned in the concept mapping.`);
+      report(3, generator.id, `Random generator "${generator.label}" has no Distribution: the simulation mapping of its class names no attribute for it.`);
     }
   }
   for (const variable of variables) {
-    if (variable.name === null) report(3, variable.id, `Variable "${variable.label}" has no VariableName assigned in the concept mapping.`);
+    if (variable.name === null) report(3, variable.id, `Variable "${variable.label}" has no VariableName: the simulation mapping of its class names no attribute for it.`);
   }
   for (const node of nodes.filter((candidate) => DECIDING.includes(candidate.concept))) {
     for (const flow of node.outgoing.map((id) => graph.flows[id])) {
       if (flow.condition === null && !withIssue.has(flow.id)) {
-        report(3, flow.id, `The ${describeFlow(flow)} leaves ${node.concept} "${node.label}" but has no TransitionCondition assigned in the concept mapping.`);
+        report(3, flow.id, `The ${describeFlow(flow)} leaves ${node.concept} "${node.label}" but has no TransitionCondition: the simulation mapping of its class names no attribute for it.`);
       }
     }
   }

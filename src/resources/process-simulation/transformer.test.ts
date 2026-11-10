@@ -1,17 +1,18 @@
 /**
  * Tests for transformer.ts. The main test is test model A of the OCPN Build Guide (draw
- * and decision), built the way it is drawn with the BPMN 2.0 metamodel; the others pin
- * one rule each.
+ * and decision); the others pin one rule each.
  *
  * Models and metamodels are plain objects in the shape of the gds classes, which is all
- * the transformer reads. Every id is invented for the test (plan 3: no real uuids in
- * code); NAME_ATTRIBUTE_UUID is the client's own constant for the standard Name attribute.
+ * the transformer reads. The mapping is a small one of its own, with invented class names
+ * ("Task", "XOR", ...), not the BPMN 2.0 mapping: it shows that the transformer knows no
+ * modelling language. Every id is invented for the test (plan 3: no real uuids in code);
+ * NAME_ATTRIBUTE_UUID is the client's own constant for the standard Name attribute.
  */
 import { describe, expect, it } from "vitest";
 import type { SceneInstance, SceneType } from "@gds";
 import { NAME_ATTRIBUTE_UUID } from "@/constants";
-import { readMappableModel, transformModel } from "./transformer";
-import type { ProcessSimulationMapping } from "./mapping";
+import { transformModel } from "./transformer";
+import type { LanguageMapping } from "./mappings";
 
 // ---------------------------------------------------------------------------------
 // A small metamodel: boxes, flows with a condition table, draws with a distribution table
@@ -22,21 +23,35 @@ const nameAttribute = { uuid: NAME_ATTRIBUTE_UUID, name: "Name", attribute_type:
 const CONDITION = ["c-variable", "c-operator", "c-value", "c-logical"]; // the condition columns, in the order of the format rule
 const DISTRIBUTION = ["d-value", "d-probability"]; // the distribution columns, in the order of the format rule
 
+const BOX_CLASSES = ["Start", "Task", "XOR", "AND", "End", "Var", "Note", "Kink"]; // one metaclass per kind of box; "Note" and "Kink" are not mapped
 const sceneType = {
-  classes: [{ uuid: "m-box", name: "Box", attributes: [nameAttribute] }], // every node and variable is a "Box"; the mapping decides what it is
+  name: "Test language", // named in messages about the mapping
+  classes: BOX_CLASSES.map((name) => ({ uuid: `m-${name}`, name, attributes: [nameAttribute] })), // e.g. { uuid: "m-Task", name: "Task" }
   relationclasses: [
     {
-      uuid: "m-flow", // the line that is mapped to SequenceFlow
-      name: "Flow", // never read by the transformer
+      uuid: "m-flow", // the line mapped to SequenceFlow
+      name: "Flow",
       attributes: [nameAttribute, { uuid: "m-condition", name: "Condition", attribute_type: { has_table_attribute: CONDITION.map((id, i) => column(id, i + 1)) } }],
     },
     {
-      uuid: "m-draw", // the line that is mapped to RandomGenerator
-      name: "Draw", // never read by the transformer
+      uuid: "m-draw", // the line mapped to RandomGenerator
+      name: "Draw",
       attributes: [nameAttribute, { uuid: "m-distribution", name: "Distribution", attribute_type: { has_table_attribute: DISTRIBUTION.map((id, i) => column(id, i + 1)) } }],
     },
   ],
 } as unknown as SceneType; // only the fields the transformer reads
+
+/** The mapping of the test language, by class name, as mappings.ts writes one. */
+const MAPPING: LanguageMapping = {
+  Start: { concept: "Start" },
+  Task: { concept: "Activity" },
+  XOR: { concept: "Decision" },
+  AND: { concept: { split: "AND-Split", join: "AND-Join" } }, // the role follows from the incoming flows
+  End: { concept: "End" },
+  Var: { concept: "Variable", data: { VariableName: "Name" } },
+  Flow: { concept: "SequenceFlow", data: { TransitionCondition: "Condition" } },
+  Draw: { concept: "RandomGenerator", data: { Distribution: "Distribution" } },
+};
 
 // ---------------------------------------------------------------------------------
 // Builders for model elements
@@ -46,15 +61,16 @@ const name = (id: string, value: string) => ({ uuid: `${id}-name`, uuid_attribut
 
 /** A table attribute instance holding `rows`. Its cells are stored in reverse, so the test proves the column order comes from the metamodel. */
 const table = (uuid: string, uuidAttribute: string, columns: string[], rows: string[][]) => ({
-  uuid, // the table's own uuid, which the mapping refers to
-  uuid_attribute: uuidAttribute, // its meta attribute, which lists the columns
+  uuid, // the table's own uuid
+  uuid_attribute: uuidAttribute, // its meta attribute, which lists the columns and which the mapping names
   value: "", // a table has no value of its own
   table_attributes: rows
     .flatMap((row, r) => row.map((value, c) => ({ uuid: `${uuid}-${r}-${c}`, uuid_attribute: columns[c], table_row: r, table_attribute_reference: uuid, value }))) // one cell per position
     .reverse(), // stored out of order on purpose
 });
 
-const box = (id: string, label: string) => ({ uuid: id, uuid_class: "m-box", attribute_instance: [name(id, label)] }); // a node or variable
+/** A box of metaclass `className` ("Task", "XOR", ...). */
+const box = (id: string, className: string, label: string) => ({ uuid: id, uuid_class: `m-${className}`, attribute_instance: [name(id, label)] });
 
 /** A line from `from` to `to`, with its tables. */
 const line = (id: string, metaclass: string, from: string, to: string, tables: object[] = []) => ({
@@ -79,8 +95,6 @@ const refer = (flowLine: ReturnType<typeof flow>, row: number, variableId: strin
 const scene = (classInstances: object[], relations: object[]) =>
   ({ uuid: "scene-1", class_instances: classInstances, relationclasses_instances: relations }) as unknown as SceneInstance; // only the fields the transformer reads
 
-const mapped = (elements: ProcessSimulationMapping["elements"]): ProcessSimulationMapping => ({ sceneInstanceId: "scene-1", elements }); // a mapping of scene-1
-
 // ---------------------------------------------------------------------------------
 // Test model A: draw and decision
 // ---------------------------------------------------------------------------------
@@ -88,7 +102,15 @@ const mapped = (elements: ProcessSimulationMapping["elements"]): ProcessSimulati
 describe("transformModel: test model A (draw and decision)", () => {
   // Start → Check stock → lager? → End ja | End nein, with lager drawn at Check stock.
   const model = scene(
-    [box("start", "Start"), box("check", "Check stock"), box("dec", "lager?"), box("endja", "End ja"), box("endnein", "End nein"), box("lager", "lager")],
+    [
+      box("start", "Start", "Start"),
+      box("check", "Task", "Check stock"),
+      box("dec", "XOR", "lager?"),
+      box("endja", "End", "End ja"),
+      box("endnein", "End", "End nein"),
+      box("lager", "Var", "lager"),
+      box("kink", "Kink", ""), // a bendpoint: its class is not mapped, so it is skipped
+    ],
     [
       flow("f1", "start", "check", EMPTY_ROW), // unconditional: only the default row
       flow("f2", "check", "dec", EMPTY_ROW), // unconditional
@@ -97,23 +119,9 @@ describe("transformModel: test model A (draw and decision)", () => {
       line("g", "m-draw", "check", "lager", [table("g-dist", "m-distribution", DISTRIBUTION, [["ja", "0,8"], ["nein", "0.2"], ["", ""]])]), // 80/20, with a comma and a dot
     ],
   );
-  const cond = (id: string) => ({ concept: "SequenceFlow" as const, data: { TransitionCondition: `${id}-cond` } }); // a flow with its condition mapped
-  const mapping = mapped({
-    start: { concept: "Start" },
-    check: { concept: "Activity" },
-    dec: { concept: "Decision" },
-    endja: { concept: "End" },
-    endnein: { concept: "End" },
-    f1: cond("f1"),
-    f2: cond("f2"),
-    f3: cond("f3"),
-    f4: cond("f4"),
-    g: { concept: "RandomGenerator", data: { Distribution: "g-dist" } },
-    lager: { concept: "Variable", data: { VariableName: "lager-name" } },
-  });
 
   it("builds the expected graph", () => {
-    expect(transformModel(sceneType, model, mapping)).toEqual({
+    expect(transformModel(sceneType, model, MAPPING)).toEqual({
       nodes: {
         start: { id: "start", label: "Start", concept: "Start", incoming: [], outgoing: ["f1"] },
         check: { id: "check", label: "Check stock", concept: "Activity", incoming: ["f1"], outgoing: ["f2"] },
@@ -146,68 +154,80 @@ describe("transformModel: test model A (draw and decision)", () => {
 // One rule per test
 // ---------------------------------------------------------------------------------
 
-describe("transformModel: rules", () => {
-  it("skips elements without a concept", () => {
-    const graph = transformModel(sceneType, scene([box("a", "A"), box("note", "Note")], [flow("f", "a", "note")]), mapped({ a: { concept: "Activity" }, f: { concept: "SequenceFlow" } })); // the note is unmapped
+describe("transformModel: concepts from the classes", () => {
+  it("skips elements of a class the mapping does not name", () => {
+    const graph = transformModel(sceneType, scene([box("a", "Task", "A"), box("note", "Note", "Note")], [flow("f", "a", "note")]), MAPPING); // "Note" is not mapped
     expect(Object.keys(graph.nodes)).toEqual(["a"]); // spec 3: unmapped elements are ignored
     expect(graph.flows.f.target).toBe("note"); // the flow still names its end; the validator reports it (spec 10, check 1)
   });
 
-  it("gives a flow without a mapped condition attribute the condition null", () => {
-    const graph = transformModel(sceneType, scene([box("a", "A"), box("b", "B")], [flow("f", "a", "b", ["x", "==", "1", "-"])]), mapped({ f: { concept: "SequenceFlow" } })); // no TransitionCondition chosen
+  it("makes a split-or-join element a join where several sequence flows lead into it, a split otherwise", () => {
+    const model = scene(
+      [box("s", "Task", "S"), box("split", "AND", "Split"), box("a", "Task", "A"), box("b", "Task", "B"), box("join", "AND", "Join"), box("v", "Var", "v")],
+      [
+        flow("f0", "s", "split"), // one flow in: diverging
+        flow("fa", "split", "a"),
+        flow("fb", "split", "b"),
+        flow("fa2", "a", "join"), // two flows in: converging
+        flow("fb2", "b", "join"),
+        line("g", "m-draw", "v", "split"), // a draw drawn towards the split is no sequence flow, so it does not count
+      ],
+    );
+    const graph = transformModel(sceneType, model, MAPPING);
+    expect(graph.nodes.split.concept).toBe("AND-Split");
+    expect(graph.nodes.join.concept).toBe("AND-Join");
+  });
+
+  it("reports a class or an attribute the mapping names but the metamodel lacks, once and on no element", () => {
+    const mapping: LanguageMapping = { ...MAPPING, Gateway: { concept: "Decision" }, Flow: { concept: "SequenceFlow", data: { TransitionCondition: "Guard" } } }; // a class and an attribute that do not exist
+    const graph = transformModel(sceneType, scene([], [flow("f1", "a", "b"), flow("f2", "a", "b")]), mapping); // two flows, still one message
+    expect(graph.issues).toEqual([
+      { elementId: null, message: 'The simulation mapping names the attribute "Guard" of "Flow" as its TransitionCondition, but the class has no such attribute.' },
+      { elementId: null, message: 'The simulation mapping names the class "Gateway", which the metamodel "Test language" does not have.' },
+    ]);
+    expect(graph.flows.f1.condition).toBeNull(); // read as not mapped; the validator adds check 3 where it matters
+  });
+});
+
+describe("transformModel: data", () => {
+  it("gives a flow the condition null when the mapping names no condition attribute", () => {
+    const mapping: LanguageMapping = { ...MAPPING, Flow: { concept: "SequenceFlow" } }; // no TransitionCondition named
+    const graph = transformModel(sceneType, scene([box("a", "Task", "A"), box("b", "Task", "B")], [flow("f", "a", "b", ["x", "==", "1", "-"])]), mapping);
     expect(graph.flows.f.condition).toBeNull(); // null, not []: the validator can tell "not mapped" from "no condition"
+  });
+
+  it("reads a missing instance of the condition table as an empty table", () => {
+    const graph = transformModel(sceneType, scene([], [line("f", "m-flow", "a", "b")]), MAPPING); // a flow drawn before the table was added to the metamodel
+    expect(graph.flows.f.condition).toEqual([]); // no condition: always taken
   });
 
   it("keeps a half-filled row, and the logical operators after the first row", () => {
     const rows = [["lager", "==", "ja", "-"], ["kunde", "==", "", "AND"]]; // the second row lacks its value
-    const graph = transformModel(sceneType, scene([], [flow("f", "a", "b", ...rows)]), mapped({ f: { concept: "SequenceFlow", data: { TransitionCondition: "f-cond" } } })); // condition mapped
+    const graph = transformModel(sceneType, scene([], [flow("f", "a", "b", ...rows)]), MAPPING);
     expect(graph.flows.f.condition).toEqual([
       { variableName: "lager", operator: "==", value: "ja", logicalOperator: null }, // the first row's "-" means nothing
       { variableName: "kunde", operator: "==", value: "", logicalOperator: "AND" }, // kept, so the validator can report it (spec 10, check 17)
     ]);
   });
 
-  it("finds node and variable of a draw by their concepts, in either direction", () => {
-    const reversed = line("g", "m-draw", "lager", "check"); // drawn from the variable to the node
-    const graph = transformModel(sceneType, scene([box("check", "Check"), box("lager", "lager")], [reversed]), mapped({ check: { concept: "Activity" }, lager: { concept: "Variable" }, g: { concept: "RandomGenerator" } }));
-    expect(graph.generators.g).toMatchObject({ node: "check", variable: "lager", distribution: null }); // direction does not matter; no distribution mapped
-    expect(graph.issues).toEqual([]); // nothing to report
-  });
-
-  it("reports a draw that is not a line between a node and a variable", () => {
-    const graph = transformModel(
-      sceneType,
-      scene([box("a", "A"), box("b", "B"), box("box", "Generator box")], [line("g", "m-draw", "a", "b")]), // a draw between two nodes, and a generator drawn as a box
-      mapped({ a: { concept: "Activity" }, b: { concept: "Activity" }, g: { concept: "RandomGenerator" }, box: { concept: "RandomGenerator" } }),
-    );
-    expect(graph.generators.g).toMatchObject({ node: "a", variable: null }); // no end is a variable
-    expect(graph.generators.box).toMatchObject({ node: null, variable: null }); // a box has no ends
-    expect(graph.issues.map((issue) => issue.elementId)).toEqual(["g", "box"]); // both reported (spec 10, check 2)
-  });
-
-  it("reports a line mapped to a node concept and leaves it out", () => {
-    const graph = transformModel(sceneType, scene([], [flow("f", "a", "b")]), mapped({ f: { concept: "Activity" } })); // a flow mapped as an activity
-    expect(graph.nodes).toEqual({}); // a line cannot be executed
-    expect(graph.issues).toHaveLength(1); // spec 10, check 2
-  });
-
-  it("skips a mapped element that is not in the model, without an issue", () => {
-    const graph = transformModel(sceneType, scene([], []), mapped({ gone: { concept: "Activity" } })); // cannot come from loadMapping; only a safety net
-    expect(graph.nodes).toEqual({}); // nothing to translate
-    expect(graph.issues).toEqual([]); // and nothing a user could have caused, so nothing to report
-  });
-
   it("reports a condition attribute that is not a table of the format rule", () => {
-    const graph = transformModel(sceneType, scene([], [flow("f", "a", "b")]), mapped({ f: { concept: "SequenceFlow", data: { TransitionCondition: "f-name" } } })); // the Name attribute chosen by mistake
+    const mapping: LanguageMapping = { ...MAPPING, Flow: { concept: "SequenceFlow", data: { TransitionCondition: "Name" } } }; // the Name attribute named by mistake
+    const graph = transformModel(sceneType, scene([], [flow("f", "a", "b")]), mapping);
     expect(graph.flows.f.condition).toBeNull(); // unreadable
     expect(graph.issues[0].message).toContain("must be a table with the columns variable, operator, value, logical operator"); // says what is expected
+  });
+
+  it("reads a variable's name from its mapped attribute, and null when the mapping names none", () => {
+    const withName = transformModel(sceneType, scene([box("v", "Var", "  lager  ")], []), MAPPING); // a name with spaces around it
+    expect(withName.variables.v.name).toBe("lager"); // trimmed, so " lager" in a condition is not a different variable
+    const withoutName = transformModel(sceneType, scene([box("v", "Var", "lager")], []), { ...MAPPING, Var: { concept: "Variable" } });
+    expect(withoutName.variables.v.name).toBeNull(); // spec 10, check 3 reports it
   });
 
   it("reads a reference cell as the current name of the variable it points at", () => {
     const f = flow("f", "a", "b", ["Lager", "==", "ja", "-"], ["kunde", "==", "premium", "AND"]); // row 0 picked when the variable was still called "Lager"; row 1 typed
     refer(f, 0, "v"); // row 0's variable cell is a reference to v
-    const model = scene([box("v", "lager")], [f]); // v has been renamed to "lager" since
-    const graph = transformModel(sceneType, model, mapped({ v: { concept: "Variable", data: { VariableName: "v-name" } }, f: { concept: "SequenceFlow", data: { TransitionCondition: "f-cond" } } }));
+    const graph = transformModel(sceneType, scene([box("v", "Var", "lager")], [f]), MAPPING); // v has been renamed to "lager" since
     expect(graph.flows.f.condition?.map((row) => row.variableName)).toEqual(["lager", "kunde"]); // the current name, not the stale "Lager"; typed text as before
     expect(graph.issues).toEqual([]); // nothing to report
   });
@@ -215,30 +235,32 @@ describe("transformModel: rules", () => {
   it("reports a reference cell that points at an element of another model", () => {
     const f = flow("f", "a", "b", ["lager", "==", "ja", "-"]); // picked from the variables of another model
     refer(f, 0, "elsewhere"); // an element this model does not contain
-    const graph = transformModel(sceneType, scene([], [f]), mapped({ f: { concept: "SequenceFlow", data: { TransitionCondition: "f-cond" } } }));
+    const graph = transformModel(sceneType, scene([], [f]), MAPPING);
     expect(graph.flows.f.condition?.[0].variableName).toBe("lager"); // the stored text is kept
     expect(graph.issues).toEqual([{ elementId: "f", message: 'A row of the TransitionCondition of "Name" refers to "lager", which belongs to another model.' }]); // reported on the flow (spec 10, check 2)
   });
-
-  it("reads a variable's name from its mapped attribute, and null when none is mapped", () => {
-    const model = scene([box("v", "  lager  "), box("w", "kunde")], []); // a name with spaces around it
-    const graph = transformModel(sceneType, model, mapped({ v: { concept: "Variable", data: { VariableName: "v-name" } }, w: { concept: "Variable" } }));
-    expect(graph.variables.v.name).toBe("lager"); // trimmed, so " lager" in a condition is not a different variable
-    expect(graph.variables.w.name).toBeNull(); // spec 10, check 3 reports it
-  });
 });
 
-describe("readMappableModel", () => {
-  it("lists every element and line with its attribute instances, and leaves bendpoints out", () => {
-    const withBendpoint = { ...sceneType, relationclasses: sceneType.relationclasses.map((relationclass) => ({ ...relationclass, bendpoint: "m-kink" })) } as unknown as SceneType; // the lines of this metamodel may have kinks
-    const kink = { uuid: "kink-1", uuid_class: "m-kink", attribute_instance: [] }; // a kink of a line: stored as a class instance of its own
-    const model = scene([box("check", "Check stock"), kink], [flow("f1", "check", "check", ["lager", "==", "ja", "-"])]);
-    expect(readMappableModel(withBendpoint, model)).toEqual({
-      sceneInstanceId: "scene-1",
-      elementAttributes: {
-        check: ["check-name"], // the box with its Name attribute
-        f1: ["f1-name", "f1-cond"], // the line with its Name and condition table
-      }, // no entry for kink-1
-    });
+describe("transformModel: elements that cannot carry their concept", () => {
+  it("finds node and variable of a draw by their concepts, in either direction", () => {
+    const reversed = line("g", "m-draw", "lager", "check"); // drawn from the variable to the node, without a distribution table
+    const graph = transformModel(sceneType, scene([box("check", "Task", "Check"), box("lager", "Var", "lager")], [reversed]), MAPPING);
+    expect(graph.generators.g).toMatchObject({ node: "check", variable: "lager", distribution: [] }); // direction does not matter; a missing table reads as empty
+    expect(graph.issues).toEqual([]); // nothing to report
+  });
+
+  it("reports a draw that is not a line between a node and a variable", () => {
+    const mapping: LanguageMapping = { ...MAPPING, Note: { concept: "RandomGenerator" } }; // a generator drawn as a box
+    const graph = transformModel(sceneType, scene([box("a", "Task", "A"), box("b", "Task", "B"), box("box", "Note", "Generator box")], [line("g", "m-draw", "a", "b")]), mapping);
+    expect(graph.generators.g).toMatchObject({ node: "a", variable: null }); // no end is a variable
+    expect(graph.generators.box).toMatchObject({ node: null, variable: null }); // a box has no ends
+    expect(graph.issues.map((issue) => issue.elementId).sort()).toEqual(["box", "g"]); // both reported (spec 10, check 2)
+  });
+
+  it("reports a line mapped to a node concept and leaves it out", () => {
+    const mapping: LanguageMapping = { ...MAPPING, Flow: { concept: "Activity" } }; // flows mapped as activities
+    const graph = transformModel(sceneType, scene([], [flow("f", "a", "b")]), mapping);
+    expect(graph.nodes).toEqual({}); // a line cannot be executed
+    expect(graph.issues).toHaveLength(1); // spec 10, check 2
   });
 });

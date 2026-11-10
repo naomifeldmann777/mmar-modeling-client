@@ -24,7 +24,6 @@ import MapFromFileDialog from "@/views/dialogs/MapFromFileDialog";
 import UserInfoDialog from "@/views/dialogs/UserInfoDialog";
 import ShareSceneDialog from "@/views/dialogs/ShareSceneDialog";
 import AlgorithmDialog from "@/views/dialogs/AlgorithmDialog";
-import MappingDialog from "@/views/process-simulation/MappingDialog"; // the concept-mapping popup of the process simulation
 import { useAuthStore } from "@/resources/store/authStore";
 import { useUiStore } from "@/resources/store/uiStore";
 import { eventBus } from "@/resources/services/event-bus";
@@ -146,8 +145,6 @@ export default function AppLayout() {
       <UserInfoDialog />
       <ShareSceneDialog />
       <AlgorithmDialog />
-      {/* mounted closed like every other dialog; the Process Simulation menu opens it through uiStore */}
-      <MappingDialog />
     </Box>
   );
 }

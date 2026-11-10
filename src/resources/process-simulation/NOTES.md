@@ -295,6 +295,8 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
 
 ### Phase 3: the mapping (`mapping.ts`, `views/process-simulation/MappingDialog.tsx`)
 
+*Replaced in Phase 9 by the mapping per class; both files are removed.*
+
 - Format: `{ sceneInstanceId, elements: { <element uuid>: { concept, data? } } }`; `data`
   maps a data concept to the uuid of the element's own **attribute instance**. No version
   field: a stored or imported text that does not have this shape is discarded whole.
@@ -405,6 +407,37 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
   "variable = value" to the right of each variable that has a value (not at the random
   generator, where it covered the node). Labels keep their size until the next step.
 - Logging out resets the store (`session-reset.ts`).
+
+### Phase 9: mapping per class (Plan2 A0 to A4)
+
+- Decided with Prof. Fill and Gunakar (Plan2 section 2): the mapping belongs to the modelling
+  language, not to one model. It is code in `mappings.ts`: per scene type name, per metaclass
+  name, the concept and, per data concept, the NAME of the meta attribute that holds it.
+  Names, not uuids: readable, and uuids differ between installations. `mappingFor(name)`
+  returns the mapping of a scene type, or null.
+- The popup (`MappingDialog.tsx`), the per-element mapping (`mapping.ts`, localStorage, export
+  and import), the menu entry "Concept Mapping…" and its uiStore dialog are removed.
+- Start of a run: tab → `mappingFor(sceneType.name)` → `transformModel` → store. A scene type
+  without a mapping opens the panel with the message "The process simulation has no mapping
+  for the metamodel …".
+- Classes with two roles (BPMN Parallel and Inclusive Gateway): `{ split, join }` in the
+  mapping; `resolveConcept` makes an element a join when more than one SEQUENCE FLOW leads
+  into it, a split otherwise. This follows BPMN 2.0 chapter 13 (converging / diverging) and
+  Prof. Fill's suggestion to settle the role when a run starts. A gateway with several
+  incoming AND several outgoing flows becomes a join and is refused by check 9 (a join has
+  exactly one outgoing flow): a limitation, since one node cannot be both.
+- The Exclusive Gateway is a Decision both ways (spec 3). Merging, it lets every token pass
+  (spec 5.3), and its single outgoing flow has no condition, so it is always taken. No new
+  concept was needed.
+- The transformer finds every element's metaclass through `uuid_class` (relation instances
+  carry their relation class there too). Elements of unmapped classes, bendpoints included,
+  are skipped. A class or attribute the mapping names but the metamodel lacks is reported
+  once, as an issue on no element (`GraphIssue.elementId` may now be null). An element
+  without an instance of a mapped table attribute reads it as empty.
+- Check 3 messages now say "the simulation mapping of its class names no attribute for it".
+- The variable column of a condition may be a reference ("Variable Reference 2.0"); the
+  transformer reads it as the current name of the referenced variable (decided before
+  Phase 9, see the header of `transformer.ts`).
 
 ## Findings of Phase 0 for later phases
 

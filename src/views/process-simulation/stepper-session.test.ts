@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 //
-// Tests for stepper-session.ts: starting the stepper on the open model (with and without a
-// stored mapping), the mode (5 while open, back to view mode when stopped), and stopping with a
+// Tests for stepper-session.ts: starting the stepper on the open model (with the mapping of its
+// scene type, or with a message when there is none), the mode (5 while open, back to view mode when stopped), and stopping with a
 // message when the tab, the model or the mode changes. `@/engine` is mocked: the real barrel
-// builds a WebGLRenderer at module scope. The store, the event bus, the logger, the mapping
-// and the transformer are the real ones. Every id is invented for the test.
+// builds a WebGLRenderer at module scope. `mappingFor` is mocked, so the test does not depend
+// on the names of the BPMN 2.0 metamodel. The store, the event bus, the logger and the
+// transformer are the real ones. Every id is invented for the test.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SceneInstance, SceneType } from "@gds";
 
@@ -16,19 +17,27 @@ vi.mock("@/engine", () => ({
   globalObject: mocks.globalObject,
   globalStateObject: mocks.globalStateObject,
 }));
+vi.mock("@/resources/process-simulation/mappings", async (importOriginal) => ({
+  ...(await importOriginal<object>()), // resolveConcept stays real, the transformer needs it
+  mappingFor: (sceneTypeName: string) => // only the test language has a mapping
+    sceneTypeName === "Test language" ? { Start: { concept: "Start" }, End: { concept: "End" }, Flow: { concept: "SequenceFlow" } } : null,
+}));
 
-import { saveMapping } from "@/resources/process-simulation/mapping";
 import { eventBus } from "@/resources/services/event-bus";
 import { useLogStore } from "@/resources/store/logStore";
 import { useProcessSimulationStore } from "@/resources/store/processSimulationStore";
 import { useStateStore } from "@/resources/store/stateStore";
 import { startStepper, stopStepper } from "./stepper-session";
 
-// A model with a Start box, an End box and one line between them.
-const sceneType = { classes: [{ uuid: "m-box", name: "Box", attributes: [] }], relationclasses: [{ uuid: "m-flow", name: "Flow", attributes: [] }] } as unknown as SceneType;
+// A model of the test language with a Start box, an End box and one line between them.
+const sceneType = {
+  name: "Test language", // the scene type mappingFor knows
+  classes: [{ uuid: "m-start", name: "Start", attributes: [] }, { uuid: "m-end", name: "End", attributes: [] }],
+  relationclasses: [{ uuid: "m-flow", name: "Flow", attributes: [] }],
+} as unknown as SceneType;
 const sceneInstance = {
   uuid: "scene-1",
-  class_instances: [{ uuid: "start", uuid_class: "m-box", attribute_instance: [] }, { uuid: "end", uuid_class: "m-box", attribute_instance: [] }],
+  class_instances: [{ uuid: "start", uuid_class: "m-start", attribute_instance: [] }, { uuid: "end", uuid_class: "m-end", attribute_instance: [] }],
   relationclasses_instances: [{ uuid: "f1", uuid_class: "m-flow", uuid_relationclass: "m-flow", attribute_instance: [], role_instance_from: { uuid_has_reference_class_instance: "start" }, role_instance_to: { uuid_has_reference_class_instance: "end" } }],
 } as unknown as SceneInstance;
 
@@ -36,7 +45,6 @@ const store = () => useProcessSimulationStore.getState();
 const snackbar = () => useLogStore.getState().snackbar;
 
 beforeEach(() => {
-  window.localStorage.clear(); // no stored mapping unless a test saves one
   mocks.globalObject.tabContext = [{ sceneType, sceneInstance }]; // the model is open
   mocks.globalStateObject.setState.mockClear();
   store().reset();
@@ -49,8 +57,7 @@ afterEach(() => {
 });
 
 describe("stepper-session", () => {
-  it("starts a run on the open model with its stored mapping, and locks the model", () => {
-    saveMapping({ sceneInstanceId: "scene-1", elements: { start: { concept: "Start" }, end: { concept: "End" }, f1: { concept: "SequenceFlow" } } }, window.localStorage);
+  it("starts a run on the open model with the mapping of its scene type, and locks the model", () => {
     startStepper();
     expect(store().active).toBe(true);
     expect(store().problems).toEqual([]);
@@ -58,11 +65,12 @@ describe("stepper-session", () => {
     expect(mocks.globalStateObject.setState).toHaveBeenLastCalledWith(5); // ProcessSimulationMode
   });
 
-  it("opens with the validator's problems when nothing is mapped yet", () => {
-    startStepper(); // no stored mapping: an empty one, so the graph has no Start
-    expect(store().active).toBe(true);
+  it("opens with a message, and no run, when the model's scene type has no mapping", () => {
+    mocks.globalObject.tabContext = [{ sceneType: { ...sceneType, name: "Robotic System" }, sceneInstance }]; // a language the simulation does not know
+    startStepper();
+    expect(store().active).toBe(true); // the panel opens, so the user reads why nothing runs
     expect(store().run).toBeNull();
-    expect(store().problems.map((p) => p.check)).toContain(4);
+    expect(store().message).toBe('The process simulation has no mapping for the metamodel "Robotic System", so it cannot simulate this model.');
   });
 
   it("does not open without an open model, and says so", () => {
