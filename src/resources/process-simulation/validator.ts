@@ -758,7 +758,16 @@ function checkPairs({ graph, nodes, report, describeFlow }: Context) {
       const splits = [...new Set(join.incoming.map((input) => splitOf.get(input)).filter((split) => split !== undefined))]; // the splits whose branches end here; a Set keeps each once
       if (splits.length > 1) {
         const names = splits.map((split) => `${split.concept} "${split.label}"`).join(" and "); // e.g. AND-Split "P1" and AND-Split "P2"
-        report(24, join.id, `${join.concept} "${join.label}" closes the branches of ${splits.length} splits, ${names}. A join closes exactly one split; if not all of them run, it waits forever for the branches of the others. Give each split its own join.`); // (f)
+        // The way out: a split that another of them leads to lies inside that one's branch, so it
+        // needs its own join, which then leads into this one. Example: AND-Split "1" → … → AND-Split
+        // "2", both closed by AND-Join "3": "Give AND-Split "2" its own AND-Join, and lead that into
+        // AND-Join "3"." Splits side by side (e.g. on the two sides of a Decision) get the general advice.
+        const forward = (node: GraphNode) => node.outgoing.map((flowId) => graph.flows[flowId].target).filter((id): id is string => !!id && !!graph.nodes[id]); // the nodes right after `node`
+        const inner = splits.filter((split) => splits.some((other) => other !== split && search(graph, [other.id], forward).has(split.id))); // reached from another of the splits
+        const advice = inner.length > 0
+          ? inner.map((split) => `Give ${split.concept} "${split.label}" its own ${kind.joins[0]}, and lead that into ${join.concept} "${join.label}".`).join(" ") // e.g. AND-Split "2" → its own AND-Join
+          : "Give each split its own join."; // side by side: no split is inside another
+        report(24, join.id, `${join.concept} "${join.label}" closes the branches of ${splits.length} splits, ${names}. A join closes exactly one split. ${advice}`); // (f)
       }
     }
 

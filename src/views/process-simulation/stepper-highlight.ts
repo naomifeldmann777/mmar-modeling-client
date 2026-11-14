@@ -95,29 +95,41 @@ export function clearHighlights(): void {
 
 /** A glow in `look` (colour and strength) around `object` (see the top of the file); nothing when the element is not drawn. */
 function addGlow(scene: THREE.Scene, object: THREE.Object3D | undefined, look: { colour: string; opacity: number }): void {
-  if (!object) return; // e.g. an element of another tab: nothing to highlight
-  const bounds = new THREE.Box3().setFromObject(object); // the space the element takes
-  if (bounds.isEmpty()) return; // nothing to put a glow around
-  const width = bounds.max.x - bounds.min.x; // the element's size in the drawing plane
-  const height = bounds.max.y - bounds.min.y;
-  const side = Math.min(width, height) || Math.max(width, height); // the shorter side, so a long task does not get a huge glow
-  const centre = bounds.getCenter(new THREE.Vector3()); // the glow is centred on the element
-  const gap = side * GLOW_WIDTH; // how far the glow reaches beyond the element
-
-  const ring = new THREE.Shape(); // the outer edge: the element's rectangle, enlarged, with round corners
-  roundedRectangle(ring, width + 2 * gap, height + 2 * gap, gap);
-  const hole = new THREE.Path(); // the element's own rectangle, left open so the element stays visible
-  roundedRectangle(hole, width, height, side * 0.05);
-  ring.holes.push(hole);
-
-  const glow = new THREE.Mesh(
-    new THREE.ShapeGeometry(ring, 12), // 12 segments per corner: smoothly rounded
-    new THREE.MeshBasicMaterial({ color: look.colour, transparent: true, opacity: look.opacity, depthTest: false, depthWrite: false, side: THREE.DoubleSide }), // see-through like a highlighter, never hidden behind another element, visible from both sides in the 3D view
-  );
-  glow.position.set(centre.x, centre.y, bounds.max.z); // at the front of the element
-  glow.renderOrder = 10; // after the model, so the glow lies on top
+  const glow = ringAround(object, look.colour, look.opacity, GLOW_WIDTH); // the band around the element
+  if (!glow) return; // the element is not drawn: nothing to highlight
   scene.add(glow);
   helpers.push(glow);
+}
+
+/**
+ * A see-through band in `colour` around `object`, reaching `width` times the object's shorter
+ * side beyond it, with rounded corners; null when the element is not drawn. The caller adds it
+ * to the scene and removes it again. Also used by the path analysis (path-highlight), with a
+ * narrow band as an outline.
+ */
+export function ringAround(object: THREE.Object3D | undefined, colour: string, opacity: number, width: number): THREE.Mesh | null {
+  if (!object) return null; // e.g. an element of another tab: nothing to highlight
+  const bounds = new THREE.Box3().setFromObject(object); // the space the element takes
+  if (bounds.isEmpty()) return null; // nothing to put a band around
+  const elementWidth = bounds.max.x - bounds.min.x; // the element's size in the drawing plane
+  const height = bounds.max.y - bounds.min.y;
+  const side = Math.min(elementWidth, height) || Math.max(elementWidth, height); // the shorter side, so a long task does not get a huge band
+  const centre = bounds.getCenter(new THREE.Vector3()); // the band is centred on the element
+  const gap = side * width; // how far the band reaches beyond the element
+
+  const ring = new THREE.Shape(); // the outer edge: the element's rectangle, enlarged, with round corners
+  roundedRectangle(ring, elementWidth + 2 * gap, height + 2 * gap, gap);
+  const hole = new THREE.Path(); // the element's own rectangle, left open so the element stays visible
+  roundedRectangle(hole, elementWidth, height, side * 0.05);
+  ring.holes.push(hole);
+
+  const band = new THREE.Mesh(
+    new THREE.ShapeGeometry(ring, 12), // 12 segments per corner: smoothly rounded
+    new THREE.MeshBasicMaterial({ color: colour, transparent: true, opacity, depthTest: false, depthWrite: false, side: THREE.DoubleSide }), // see-through like a highlighter, never hidden behind another element, visible from both sides in the 3D view
+  );
+  band.position.set(centre.x, centre.y, bounds.max.z); // at the front of the element
+  band.renderOrder = 10; // after the model, so the band lies on top
+  return band;
 }
 
 /** Draws a rectangle of `width` × `height` around (0, 0) with corners rounded by `radius` into `path`. */

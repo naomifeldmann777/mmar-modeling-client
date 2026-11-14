@@ -17,6 +17,7 @@ import { useStateStore } from "@/resources/store/stateStore";
 import { useUiStore } from "@/resources/store/uiStore";
 import { useLogStore } from "@/resources/store/logStore";
 import { useProcessSimulationStore } from "@/resources/store/processSimulationStore";
+import { usePathAnalysisStore } from "@/resources/store/pathAnalysisStore";
 
 /**
  * Tears the whole session down when a user logs out, so the next user starts from an
@@ -108,6 +109,7 @@ export function resetSessionState(): void {
   // before the mode below is reset, so the stepper does not report that its mode was left.
   // Its panel unmounts with the body, which removes the highlighting in the 3D model.
   useProcessSimulationStore.getState().reset();
+  usePathAnalysisStore.getState().reset(); // likewise an open path analysis; path-analysis-session then stops watching the model
   // Interaction mode is reset through the field rather than `setState(0)`: that runs
   // `onStateChange`, which dereferences engine controls that need not exist yet.
   globalStateObject.activeState = "";

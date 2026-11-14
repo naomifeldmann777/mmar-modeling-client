@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   globalSelectedObject: { removeObject: vi.fn() },
   globalStateObject: { setState: vi.fn() },
   startStepper: vi.fn(), // the Stepper entry of the Process Simulation menu
+  openPathAnalysis: vi.fn(), // the Path Analysis entry of the Process Simulation menu
   persistencyHandler: {
     saveToTextfile: vi.fn(async (): Promise<void> => undefined),
     saveAllOpenModelInstancesToTextfile: vi.fn(async (): Promise<void> => undefined),
@@ -29,6 +30,9 @@ vi.mock("@/resources/services/persistency-handler", () => ({
 }));
 // The Stepper entry starts the process-simulation stepper; only the wiring is tested here
 // (stepper-session.test covers what starting does).
+vi.mock("@/views/process-simulation/path-analysis-session", () => ({
+  openPathAnalysis: mocks.openPathAnalysis,
+}));
 vi.mock("@/views/process-simulation/stepper-session", () => ({
   startStepper: mocks.startStepper,
 }));
@@ -122,5 +126,12 @@ describe("TopNavBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Process Simulation" }));
     fireEvent.click(screen.getByText("Stepper"));
     expect(mocks.startStepper).toHaveBeenCalledTimes(1); // stepper-session reads the model and opens the panel
+  });
+
+  it("opens the path analysis from the Process Simulation menu", () => {
+    render(<TopNavBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Process Simulation" }));
+    fireEvent.click(screen.getByText("Path Analysis"));
+    expect(mocks.openPathAnalysis).toHaveBeenCalledTimes(1); // path-analysis-session opens the panel
   });
 });

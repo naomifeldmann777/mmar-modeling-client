@@ -28,6 +28,7 @@
  *   should a local change still happen and announce itself as `sceneInstanceMutated`, it stops
  *   the run as well (a safety net).
  * - Switching to another tab stops the run too: the run belongs to the model it started on.
+ * - Starting the stepper closes an open path analysis: the right column shows one of them.
  *
  * Deliberately NOT here: the run itself (stepper.ts, held by processSimulationStore), the
  * display (StepperPanel) and the highlighting in the 3D model.
@@ -39,6 +40,7 @@ import { logger } from "@/resources/services/logger"; // "error" shows the messa
 import { mappingFor } from "@/resources/process-simulation/mappings"; // the mapping of the model's language, by the name of its scene type
 import { transformModel } from "@/resources/process-simulation/transformer"; // model + mapping -> graph
 import { useProcessSimulationStore } from "@/resources/store/processSimulationStore"; // the run, shared with the panel and the highlighting
+import { usePathAnalysisStore } from "@/resources/store/pathAnalysisStore"; // the path analysis gives way to the stepper
 
 const PROCESS_SIMULATION_MODE = 5; // the mode numbers of the client (engine/global-state-object): the stepper's own mode
 const VIEW_MODE = 1; // the mode the client returns to after the stepper, as after the robot simulation
@@ -53,6 +55,7 @@ export function startStepper(): void {
     return;
   }
   if (useProcessSimulationStore.getState().active) stopStepper(); // a second start replaces the first run
+  usePathAnalysisStore.getState().close(); // one panel at a time in the right column; path-analysis-session then stops watching
   endWatching(); // subscriptions of a stepper that was closed from outside, e.g. by logging out
 
   const sceneInstanceId = tab.sceneInstance.uuid; // the model the run belongs to

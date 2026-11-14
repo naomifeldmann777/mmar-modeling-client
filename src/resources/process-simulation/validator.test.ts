@@ -681,4 +681,17 @@ describe("validateGraph: check 27 (execution times)", () => {
     g.nodes.check.executionTime = null; // e.g. "2.5" typed into Check stock's time
     expect(validateGraph(g).map((p) => [p.check, p.elementId])).toEqual([[27, "check"]]); // one message, on the node
   });
+
+  it("tells which split needs its own join when one split lies inside the branch of another", () => {
+    // AND-Split p1 → (a) and (b → AND-Split p2 → (c) and (e)); a, c and e all lead into one AND-Join.
+    const g = graph({
+      nodes: [node("start", "Start"), node("p1", "AND-Split"), node("a", "Activity"), node("b", "Activity"), node("p2", "AND-Split"), node("c", "Activity"), node("e", "Activity"), node("join", "AND-Join"), node("end", "End")],
+      flows: [
+        flow("f0", "start", "p1"), flow("a1", "p1", "a"), flow("b1", "p1", "b"), flow("b2", "b", "p2"), flow("c1", "p2", "c"), flow("e1", "p2", "e"),
+        flow("a2", "a", "join"), flow("c2", "c", "join"), flow("e2", "e", "join"), flow("f9", "join", "end"),
+      ],
+    });
+    const shared = validateGraph(g).find((p) => p.elementId === "join")!; // the message on the shared join
+    expect(shared.message).toContain('Give AND-Split "p2" its own AND-Join, and lead that into AND-Join "join".');
+  });
 });

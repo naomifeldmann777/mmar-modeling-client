@@ -468,6 +468,27 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
   via token timestamps (a node starts at the latest of its tokens; a skip token takes no time).
   Expected times = mean over the finished runs.
 
+### Phase 12: path analysis, user interface (Plan2 B2)
+
+- Menu "Process Simulation → Path Analysis" (`openPathAnalysis`) opens `PathAnalysisPanel` in the
+  right column, above the attribute window (the model may be edited while it is open). The
+  stepper and the path analysis close each other.
+- Panel: runs (1000 proposed, 1 to `MAX_RUNS`), "Seed" + "Value", Start; summary (runs,
+  expected ET and CT, aborted / stuck runs, seed); paths sortable by probability, ET or CT,
+  numbered by probability (path 1 = most probable, as BEE-UP); a click shows the path in the
+  model (orange outline around nodes, orange copy over taken flows, `path-highlight.ts`) and
+  lists its elements as BEE-UP does (`path-report.ts`: branches indented and marked "*", the
+  condition taken at a Decision / OR-Split, drawn values); executions per node folded away;
+  Export CSV; Close.
+- CSV (`pathAnalysisCsv`): one file, semicolons and decimal commas for Excel, with a byte
+  order mark; tables summary, paths, executions per node, runs.
+- The analysis runs in one go (no click is taken before it is done). Afterwards the session
+  compares a JSON fingerprint of the model's elements with the analysed one once a second, since
+  the client announces local edits in no single event; once they differ, the panel says so,
+  the highlighted path goes and paths cannot be selected until the next analysis. A tab change
+  closes the panel.
+- `ringAround` was taken out of `stepper-highlight.ts` so both highlightings draw the same band.
+
 ## Findings of Phase 0 for later phases
 
 These were the open findings of Phase 0; they are answered in the section above, except
