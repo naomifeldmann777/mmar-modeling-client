@@ -451,6 +451,23 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
 - The firing rule stays free of time; the path analysis derives execution time and cycle time
   from the runs (spec 9.1).
 
+### Phase 11: path analysis, library (`path-analysis.ts`, Plan2 B1)
+
+- `analysePaths(graph, { runs, seed? })`: validator first; then `runs` runs with the two
+  operations of firing.ts. Runs are kept between 1 and `MAX_RUNS` = 10000 (measured: 10000 runs
+  of a model with 19 nodes, a parallel block and a loop take about 1 s); a run stops after
+  `MAX_STEPS` = 1000 steps as "aborted"; a run with no possible step is "noStep".
+- The system picks: the node whose token was placed most recently (one branch is advanced until
+  it waits at its join, then the next, as in BEE-UP; ties: first in the list), then a value by
+  the probabilities.
+- Seed: Mulberry32 (`seededRandom`), no dependency. Without a seed one is chosen and reported,
+  so the same seed, graph and number of runs repeat the analysis exactly.
+- Path = trace (node uuids in order). Probability = runs of the path / all runs, so aborted and
+  stuck runs make the paths add up to less than 1. Every run is kept (spec 9).
+- Times (spec 9.1): execution time = sum of the execution times of executed nodes; cycle time
+  via token timestamps (a node starts at the latest of its tokens; a skip token takes no time).
+  Expected times = mean over the finished runs.
+
 ## Findings of Phase 0 for later phases
 
 These were the open findings of Phase 0; they are answered in the section above, except
