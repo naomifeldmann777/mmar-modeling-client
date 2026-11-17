@@ -18,12 +18,13 @@ import type { NodeConcept } from "./vocabulary";
 const node = (id: string, concept: NodeConcept): GraphNode => ({ id, label: id, concept, executionTime: 0, incoming: [], outgoing: [] }); // flows are wired by graph()
 const row = (variableName: string, operator: string, value: string, link: string | null = null): ConditionRow => ({ variableName, operator, value, logicalOperator: link }); // one condition row
 const flow = (id: string, source: string | null, target: string | null, ...rows: ConditionRow[]): GraphFlow => ({ id, label: id, source, target, condition: rows }); // [] when no rows: no condition
-const draw = (id: string, at: string, variable: string, entries: [string, number | null][] | null): GraphGenerator => ({
+const draw = (id: string, at: string, variable: string, entries: [string, number | null][]): GraphGenerator => ({
   id, // the generator
   label: id, // its name
   node: at, // where it draws
   variable, // into which variable
-  distribution: entries && entries.map(([value, probability]) => ({ value, probability })), // value / probability pairs
+  distribution: { type: "Discrete", entries: entries.map(([value, probability]) => ({ value, probability })) }, // value / probability pairs
+  unmapped: [], // every data it needs is mapped
 });
 const variable = (id: string, name: string | null = id): GraphVariable => ({ id, label: id, name }); // name defaults to the id
 
@@ -160,10 +161,10 @@ describe("validateGraph: mapping (checks 1 to 3)", () => {
     expect(validateGraph(g)).toEqual([{ severity: "error", check: 2, message: "\"x\" is a line, so it cannot be executed as Activity.", elementId: "x" }]);
   });
 
-  it("3: Distribution, VariableName and the conditions after a Decision must be assigned", () => {
+  it("3: the distribution data, VariableName and the conditions after a Decision must be assigned", () => {
     const g = modelA();
     g.flows.f3.condition = null; // no TransitionCondition mapped on a flow leaving the decision
-    g.generators.g.distribution = null; // no Distribution mapped
+    g.generators.g.unmapped = ["DiscreteDistribution"]; // no DiscreteDistribution mapped
     g.variables.lager.name = null; // no VariableName mapped
     expect(validateGraph(g).filter((p) => p.check === 3).map((p) => p.elementId)).toEqual(["g", "lager", "f3"]);
   });
@@ -222,30 +223,52 @@ describe("validateGraph: variables and random generators (checks 10 to 13)", () 
 
   it("11: a random generator lists at least one value", () => {
     const g = modelA();
-    g.generators.g.distribution = []; // a table without a filled row
+    g.generators.g.distribution = { type: "Discrete", entries: [] }; // a table without a filled row
     expect(checks(validateGraph(g))).toContain(11);
   });
 
   it("12: probabilities are numbers, not negative, and add up to one", () => {
     const g = modelA();
-    g.generators.g.distribution = [{ value: "ja", probability: 0.7 }, { value: "nein", probability: 0.2 }]; // 0.9 in total
+    g.generators.g.distribution = { type: "Discrete", entries: [{ value: "ja", probability: 0.7 }, { value: "nein", probability: 0.2 }] }; // 0.9 in total
     expect(validateGraph(g).find((p) => p.check === 12)?.message).toContain("add up to 0.9, not 1");
-    g.generators.g.distribution = [{ value: "ja", probability: 1.2 }, { value: "nein", probability: -0.2 }]; // 1 in total, but negative
+    g.generators.g.distribution = { type: "Discrete", entries: [{ value: "ja", probability: 1.2 }, { value: "nein", probability: -0.2 }] }; // 1 in total, but negative
     expect(validateGraph(g).find((p) => p.check === 12)?.message).toContain('"nein" is negative');
-    g.generators.g.distribution = [{ value: "ja", probability: null }, { value: "nein", probability: 0.2 }]; // "abc" in the table
+    g.generators.g.distribution = { type: "Discrete", entries: [{ value: "ja", probability: null }, { value: "nein", probability: 0.2 }] }; // "abc" in the table
     expect(validateGraph(g).find((p) => p.check === 12)?.message).toContain('"ja" is not a number');
   });
 
   it("12: a small rounding error is tolerated", () => {
     const g = modelA();
-    g.generators.g.distribution = [{ value: "ja", probability: 0.1 }, { value: "nein", probability: 0.2 }, { value: "x", probability: 0.7 }]; // 0.1 + 0.2 + 0.7 is not exactly 1 in a computer
+    g.generators.g.distribution = { type: "Discrete", entries: [{ value: "ja", probability: 0.1 }, { value: "nein", probability: 0.2 }, { value: "x", probability: 0.7 }] }; // 0.1 + 0.2 + 0.7 is not exactly 1 in a computer
     expect(checks(validateGraph(g))).not.toContain(12);
   });
 
   it("13: no value appears twice in one distribution", () => {
     const g = modelA();
-    g.generators.g.distribution = [{ value: "ja", probability: 0.5 }, { value: "ja", probability: 0.3 }, { value: "nein", probability: 0.2 }];
+    g.generators.g.distribution = { type: "Discrete", entries: [{ value: "ja", probability: 0.5 }, { value: "ja", probability: 0.3 }, { value: "nein", probability: 0.2 }] };
     expect(validateGraph(g).filter((p) => p.check === 13)).toHaveLength(1);
+  });
+
+  it("3: every data the distribution type reads must be assigned, one message each", () => {
+    const g = modelA();
+    g.generators.g.distribution = { type: "Normal", mean: null, standardDeviation: null }; // the attributes are not mapped, so nothing is read
+    g.generators.g.unmapped = ["Mean", "StandardDeviation"];
+    expect(validateGraph(g).filter((p) => p.check === 3).map((p) => p.message)).toEqual([
+      'Random generator "g" has no Mean: the simulation mapping of its class names no attribute for it.',
+      'Random generator "g" has no StandardDeviation: the simulation mapping of its class names no attribute for it.',
+    ]);
+  });
+
+  it("14: the distribution type is one the simulation supports", () => {
+    const g = modelA();
+    g.generators.g.distribution = { type: "Unsupported", written: "" }; // no type chosen
+    expect(validateGraph(g).find((p) => p.check === 14)?.message).toContain("has no distribution type");
+    g.generators.g.distribution = { type: "Unsupported", written: "Poisson" }; // a word the simulation does not know
+    expect(validateGraph(g).find((p) => p.check === 14)?.message).toContain('"Poisson"; supported are Discrete, Normal, Uniform, Exponential');
+    g.generators.g.distribution = { type: "Normal", mean: 100, standardDeviation: 15 }; // known, but not drawn from yet
+    expect(validateGraph(g).find((p) => p.check === 14)?.message).toContain("cannot draw from yet");
+    g.generators.g.unmapped = ["DistributionType"]; // the type is not mapped at all
+    expect(checks(validateGraph(g))).not.toContain(14); // check 3 says so; one mistake, one message
   });
 });
 

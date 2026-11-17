@@ -15,7 +15,7 @@ function graph(nodes: GraphNode[], flows: GraphFlow[], withDraw: boolean): Simul
   const result: SimulationGraph = {
     nodes: Object.fromEntries(nodes.map((n) => [n.id, n])),
     flows: Object.fromEntries(flows.map((f) => [f.id, f])),
-    generators: withDraw ? { g: { id: "g", label: "g", node: "check", variable: "lager", distribution: [{ value: "ja", probability: 0.8 }, { value: "nein", probability: 0.2 }] } } : {}, // Check stock draws lager
+    generators: withDraw ? { g: { id: "g", label: "g", node: "check", variable: "lager", distribution: { type: "Discrete", entries: [{ value: "ja", probability: 0.8 }, { value: "nein", probability: 0.2 }] }, unmapped: [] } } : {}, // Check stock draws lager
     variables: withDraw ? { lager: { id: "lager", label: "lager", name: "lager" } } : {},
     issues: [],
   };

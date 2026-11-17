@@ -86,7 +86,14 @@ export const MAPPINGS: Readonly<Record<string, LanguageMapping>> = {
     },
     "Random Generator 2.0": {
       concept: "RandomGenerator", // CHECK: RELATION CLASS NAME (the key above; the plan calls this relation "Triggers")
-      data: { Distribution: "Discrete Distribution Table 2.0" }, // CHECK: ATTRIBUTE NAME of the distribution table
+      data: {
+        DistributionType: "Distribution Type 2.0", // its facets are the words of DISTRIBUTION_TYPES: Discrete|Normal|Uniform|Exponential
+        DiscreteDistribution: "Discrete Distribution Table 2.0", // CHECK: ATTRIBUTE NAME of the distribution table
+        Mean: "Mean 2.0", // Normal and Exponential
+        StandardDeviation: "Standard Deviation 2.0", // Normal
+        Minimum: "Minimum 2.0", // Uniform
+        Maximum: "Maximum 2.0", // Uniform
+      },
     },
   },
 };

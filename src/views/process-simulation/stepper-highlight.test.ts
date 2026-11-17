@@ -41,7 +41,7 @@ const run = {
   graph: {
     nodes: {},
     flows: { f2: { id: "f2", label: "Name", source: "check", target: "dec", condition: null } }, // the token waits on f2 for In stock?
-    generators: { g: { id: "g", label: "Draw", node: "check", variable: "v", distribution: [] } },
+    generators: { g: { id: "g", label: "Draw", node: "check", variable: "v", distribution: { type: "Discrete", entries: [] }, unmapped: [] } },
     variables: { v: { id: "v", label: "Stock", name: "lager" } },
     issues: [],
   },

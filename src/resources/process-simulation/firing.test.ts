@@ -16,7 +16,7 @@ const node = (id: string, concept: NodeConcept): GraphNode => ({ id, label: id, 
 const is = (variableName: string, value: string): ConditionRow => ({ variableName, operator: "==", value, logicalOperator: null }); // "variable == value"
 const flow = (id: string, source: string, target: string, ...rows: ConditionRow[]): GraphFlow => ({ id, label: id, source, target, condition: rows });
 const draw = (id: string, at: string, variable: string, entries: [string, number][]): GraphGenerator => ({
-  id, label: id, node: at, variable, distribution: entries.map(([value, probability]) => ({ value, probability })),
+  id, label: id, node: at, variable, distribution: { type: "Discrete", entries: entries.map(([value, probability]) => ({ value, probability })) }, unmapped: [],
 });
 const LAGER: [string, number][] = [["ja", 0.8], ["nein", 0.2]]; // the Build Guide's distribution
 

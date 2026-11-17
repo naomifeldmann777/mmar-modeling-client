@@ -25,7 +25,7 @@
  * The format rule for data held in tables (decided in Phase 4): the attribute mapped as
  *   TransitionCondition is a table whose columns are, in this order:
  *     1 variable, 2 operator, 3 value, 4 logical operator (links a row to the previous one);
- *   the attribute mapped as Distribution is a table whose columns are, in this order:
+ *   the attribute mapped as DiscreteDistribution is a table whose columns are, in this order:
  *     1 value, 2 probability.
  * The order is the column order defined in the metamodel; further columns are ignored. A
  * row whose variable and value (or value and probability) are both empty is skipped: MMAR
@@ -41,6 +41,11 @@
  * conditions still refer to variables by name (spec 2.2), and nothing after the transformer
  * knows whether a name was typed or picked.
  *
+ * A random generator's DistributionType is read as one of the words Discrete, Normal, Uniform
+ * and Exponential, spelled exactly so (DISTRIBUTION_TYPES); then only the data of that type
+ * is read (spec 2.2), the parameters as numbers with a comma or a dot. Any other word is kept
+ * for the validator (check 14).
+ *
  * An ExecutionTime is read as a whole number of seconds; an empty one is 0, anything else
  * that is not a whole number of 0 or more is kept as null for the validator (check 27).
  *
@@ -50,13 +55,13 @@
  */
 import { table_rows, type Attribute, type AttributeInstance, type ClassInstance, type SceneInstance, type SceneType } from "@gds";
 import { NAME_ATTRIBUTE_UUID } from "@/constants";
-import type { ConditionRow, DistributionEntry, SimulationGraph } from "./graph";
+import type { ConditionRow, Distribution, DistributionEntry, SimulationGraph } from "./graph";
 import { resolveConcept, type LanguageMapping } from "./mappings"; // the mapping of the model's language, and the split-or-join rule
-import { parseDecimal } from "./numbers"; // probabilities may be written with a comma or a dot
-import { DATA_CONCEPT_OWNERS, NODE_CONCEPTS, type DataConcept, type ElementConcept, type NodeConcept } from "./vocabulary";
+import { parseDecimal } from "./numbers"; // probabilities and parameters may be written with a comma or a dot
+import { DATA_CONCEPT_OWNERS, DISTRIBUTION_DATA, DISTRIBUTION_TYPES, NODE_CONCEPTS, type DataConcept, type DistributionType, type ElementConcept, type NodeConcept } from "./vocabulary";
 
 const CONDITION_COLUMNS = ["variable", "operator", "value", "logical operator"]; // the format rule for a TransitionCondition table
-const DISTRIBUTION_COLUMNS = ["value", "probability"]; // the format rule for a Distribution table
+const DISTRIBUTION_COLUMNS = ["value", "probability"]; // the format rule for a DiscreteDistribution table
 const UNSET_VALUES = ["not defined", "undefined"]; // what older MMAR models hold in an attribute that was never set (NOTES.md, section 4)
 
 /** What the mapping makes of one element of the model. */
@@ -148,6 +153,13 @@ export function transformModel(
     return attribute === undefined ? null : (attribute?.value ?? "").trim(); // "" is reported by the validator (spec 10, check 10)
   };
 
+  // The text of a plain (not a table) attribute, trimmed; "" when the mapping names none,
+  // the element has none, or it was never set. Example: the DistributionType "Normal".
+  const textOf = (elementId: string, dataConcept: DataConcept): string => {
+    const text = (dataOf(elementId, dataConcept)?.value ?? "").trim(); // " Normal" and "Normal" are the same
+    return UNSET_VALUES.includes(text) ? "" : text; // what older models hold in an attribute never set
+  };
+
   // How long a node takes, in whole seconds (spec 9.1). Examples of the attribute's text:
   //   "30" -> 30     "" -> 0 (not given)     "2.5", "-3", "abc" -> null (check 27 reports it)
   // A concept that takes no time (a gateway, Start, End) has 0, whatever its class holds.
@@ -168,7 +180,7 @@ export function transformModel(
       : null; // a box has no ends
 
     // Reads the table attribute the mapping names as `dataConcept` (TransitionCondition or
-    // Distribution) and returns its content as plain text: one array per row, holding the
+    // DiscreteDistribution) and returns its content as plain text: one array per row, holding the
     // cell texts in column order. Example, a condition table with two rows:
     //
     //   [ ["lager", "==", "ja",      "-"  ],
@@ -245,13 +257,16 @@ export function transformModel(
       } else if (!variable || !node) {
         issue(id, `"${label}" must connect an element mapped to a node concept with an element mapped to Variable.`); // spec 10, check 2
       }
-      const rows = readTable("Distribution", DISTRIBUTION_COLUMNS); // null: no distribution attribute mapped, or unreadable
+      const written = textOf(id, "DistributionType"); // e.g. "Normal"; "" when no type is chosen
+      const type = (DISTRIBUTION_TYPES as readonly string[]).includes(written) ? (written as DistributionType) : null; // null: no type the simulation knows (check 14)
+      const needed: DataConcept[] = ["DistributionType", ...(type ? DISTRIBUTION_DATA[type] : [])]; // the type, and the data that type reads (spec 2.2)
       graph.generators[id] = {
         id, // the generator's uuid
         label, // its name
         node, // where the value is drawn
         variable, // where it is written to
-        distribution: rows ? distributionEntries(rows) : null, // [] when the table holds no filled row
+        distribution: readDistribution(written, (dataConcept) => parseDecimal(textOf(id, dataConcept)), () => readTable("DiscreteDistribution", DISTRIBUTION_COLUMNS)), // only the data of its own type is read
+        unmapped: needed.filter((dataConcept) => dataOf(id, dataConcept) === undefined), // check 3 reports these
       };
     } else if (entry.concept === "Variable") {
       graph.variables[id] = { id, label, name: variableNameOf(id) }; // the same name a reference cell reads, so both always agree
@@ -316,6 +331,24 @@ function distributionEntries(rows: string[][]): DistributionEntry[] {
     // Step 2: name the two positions; the probability becomes a number, with a comma or a
     // dot as decimal separator (null when it is not a number, which the validator reports).
     .map(([value, probability]) => ({ value, probability: parseDecimal(probability) }));
+}
+
+/**
+ * The distribution of a generator, from the text of its DistributionType. Only the data of
+ * that type is read (spec 2.2): `number` reads a parameter, `table` the DiscreteDistribution.
+ * Examples:
+ *   "Normal", Mean "100", Standard Deviation "15"   -> { type: "Normal", mean: 100, standardDeviation: 15 }
+ *   "Uniform", Minimum "", Maximum "abc"           -> { type: "Uniform", minimum: null, maximum: null }   (check 12)
+ *   ""                                             -> { type: "Unsupported", written: "" }                (check 14)
+ */
+function readDistribution(written: string, number: (dataConcept: DataConcept) => number | null, table: () => string[][] | null): Distribution {
+  switch (written) {
+    case "Discrete": return { type: "Discrete", entries: distributionEntries(table() ?? []) }; // a table not mapped is check 3, an unreadable one an issue: both read as no rows
+    case "Normal": return { type: "Normal", mean: number("Mean"), standardDeviation: number("StandardDeviation") }; // spec 2.2: Normal reads Mean and StandardDeviation
+    case "Uniform": return { type: "Uniform", minimum: number("Minimum"), maximum: number("Maximum") }; // Uniform reads Minimum and Maximum
+    case "Exponential": return { type: "Exponential", mean: number("Mean") }; // Exponential reads Mean
+    default: return { type: "Unsupported", written }; // kept as written, so check 14 can name it
+  }
 }
 
 /** True for the node concepts (spec 7); the list in vocabulary.ts is the only authority. */

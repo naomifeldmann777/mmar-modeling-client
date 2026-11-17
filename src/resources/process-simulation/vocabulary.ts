@@ -109,7 +109,12 @@ export type WaitingConcept = (typeof WAITING_CONCEPTS)[number]; // lets later co
  */
 export const DATA_CONCEPTS = [
   "TransitionCondition", // stored as a key in the mapping file, so the spelling must match the spec
-  "Distribution", // stored as a key in the mapping file, so the spelling must match the spec
+  "DistributionType", // which kind of distribution a generator draws from, and so which of the data below it reads
+  "DiscreteDistribution", // the table of values and probabilities; named "Distribution" before continuous distributions
+  "Mean", // Normal and Exponential
+  "StandardDeviation", // Normal
+  "Minimum", // Uniform
+  "Maximum", // Uniform
   "VariableName", // stored as a key in the mapping file, so the spelling must match the spec
   "ExecutionTime", // added for the path analysis (spec 9.1): how long executing a node takes
 ] as const; // `as const` keeps each entry as its own literal type
@@ -123,7 +128,12 @@ export type DataConcept = (typeof DATA_CONCEPTS)[number]; // derived from the li
  */
 export const DATA_CONCEPT_OWNERS = {
   TransitionCondition: ["SequenceFlow"], // a condition only makes sense on a flow, where it decides whether the flow is taken
-  Distribution: ["RandomGenerator"], // the values a generator can draw and how likely each is
+  DistributionType: ["RandomGenerator"], // a generator carries the data of every type; its type says which is read
+  DiscreteDistribution: ["RandomGenerator"], // the values a generator can draw and how likely each is
+  Mean: ["RandomGenerator"], // a parameter of the distribution, so it belongs where the value is drawn
+  StandardDeviation: ["RandomGenerator"], // likewise
+  Minimum: ["RandomGenerator"], // likewise
+  Maximum: ["RandomGenerator"], // likewise
   VariableName: ["Variable"], // the name conditions use to refer to the variable
   ExecutionTime: ["Activity", "ForkActivity", "SynchronizedActivity"], // the executed activities take time; routing concepts, Start and End take none (spec 2.2)
 } as const satisfies Readonly<Record<DataConcept, readonly ElementConcept[]>>; // owners per data concept, and each owner a real concept
@@ -132,7 +142,32 @@ export const DATA_CONCEPT_OWNERS = {
 export const DATA_CONCEPT_MEANINGS: Readonly<Record<DataConcept, string>> = {
   // Record over DataConcept makes the compiler insist on one meaning per data concept
   TransitionCondition: "The condition under which this flow is taken.", // shown when choosing the condition attribute
-  Distribution: "The values that can be drawn and their probabilities.", // shown when choosing the distribution attribute
+  DistributionType: "The kind of distribution the value is drawn from: Discrete, Normal, Uniform or Exponential.", // as added to spec 2.2
+  DiscreteDistribution: "For a discrete distribution, the values that can be drawn and their probabilities.", // as changed in spec 2.2
+  Mean: "The mean of a Normal or an Exponential distribution.", // as added to spec 2.2
+  StandardDeviation: "The standard deviation of a Normal distribution.", // as added to spec 2.2
+  Minimum: "The smallest value of a Uniform distribution.", // as added to spec 2.2
+  Maximum: "The largest value of a Uniform distribution.", // as added to spec 2.2
   VariableName: "The name by which the conditions refer to this variable.", // shown when choosing the name attribute
   ExecutionTime: "The time, in whole seconds, that executing this element takes.", // as added to spec 2.2
 };
+
+/**
+ * The kinds of distribution a random generator can draw from (spec 2.2, check 14). The
+ * DistributionType attribute of a generator holds one of these words, spelled exactly so.
+ */
+export const DISTRIBUTION_TYPES = ["Discrete", "Normal", "Uniform", "Exponential"] as const; // `as const` keeps each entry as its own literal type
+
+/** One of the distribution types above. */
+export type DistributionType = (typeof DISTRIBUTION_TYPES)[number]; // derived from the list so the two can never drift apart
+
+/**
+ * The data each distribution type reads (spec 2.2); a generator's other data is ignored.
+ * Check 3 requires exactly these to be mapped.
+ */
+export const DISTRIBUTION_DATA = {
+  Discrete: ["DiscreteDistribution"], // the table of values and probabilities
+  Normal: ["Mean", "StandardDeviation"], // where the values lie, and how widely they spread
+  Uniform: ["Minimum", "Maximum"], // the interval, every value in it equally likely
+  Exponential: ["Mean"], // the mean alone fixes it
+} as const satisfies Readonly<Record<DistributionType, readonly DataConcept[]>>; // one entry per type, and only real data concepts

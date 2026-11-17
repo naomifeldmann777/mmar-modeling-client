@@ -149,7 +149,7 @@ function drawOptions(graph: SimulationGraph, nodeId: string): Draw[][] {
   return generators.reduce<Draw[][]>( // take the generators one by one, each time extending the ways found so far
     (partial, generator) => // partial: the ways of the generators before this one; generator: the next one
       partial.flatMap((draws) => // every way so far is extended by every value of this generator; flatMap puts all the results into one flat list
-        (generator.distribution ?? []).map((entry) => [ // one new way per value in the distribution
+        (generator.distribution.type === "Discrete" ? generator.distribution.entries : []).map((entry) => [ // one new way per value in the distribution; other types are refused by check 14 for now
           ...draws, // what the earlier generators of this node draw
           { generator: generator.id, variableName: graph.variables[generator.variable!]?.name ?? "", value: entry.value, probability: entry.probability }, // one value of this one; `!` because the filter above kept only generators with a variable
         ]),

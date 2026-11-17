@@ -21,6 +21,8 @@ import type { LanguageMapping } from "./mappings";
 const column = (uuid: string, sequence: number) => ({ attribute: { uuid, name: uuid }, sequence }); // a table column as the metamodel defines it
 const nameAttribute = { uuid: NAME_ATTRIBUTE_UUID, name: "Name", attribute_type: { has_table_attribute: [] } }; // the standard Name attribute, no table
 const timeAttribute = { uuid: "m-time", name: "Time", attribute_type: { has_table_attribute: [] } }; // a task's execution time in seconds
+const plainAttribute = (uuid: string, name: string) => ({ uuid, name, attribute_type: { has_table_attribute: [] } }); // an attribute that is no table
+const DRAW_ATTRIBUTES = [["m-type", "Type"], ["m-mean", "Mean"], ["m-sd", "SD"], ["m-min", "Min"], ["m-max", "Max"]].map(([uuid, name]) => plainAttribute(uuid, name)); // a draw's distribution type and parameters
 const CONDITION = ["c-variable", "c-operator", "c-value", "c-logical"]; // the condition columns, in the order of the format rule
 const DISTRIBUTION = ["d-value", "d-probability"]; // the distribution columns, in the order of the format rule
 
@@ -37,7 +39,7 @@ const sceneType = {
     {
       uuid: "m-draw", // the line mapped to RandomGenerator
       name: "Draw",
-      attributes: [nameAttribute, { uuid: "m-distribution", name: "Distribution", attribute_type: { has_table_attribute: DISTRIBUTION.map((id, i) => column(id, i + 1)) } }],
+      attributes: [nameAttribute, { uuid: "m-distribution", name: "Distribution", attribute_type: { has_table_attribute: DISTRIBUTION.map((id, i) => column(id, i + 1)) } }, ...DRAW_ATTRIBUTES],
     },
   ],
 } as unknown as SceneType; // only the fields the transformer reads
@@ -51,7 +53,7 @@ const MAPPING: LanguageMapping = {
   End: { concept: "End" },
   Var: { concept: "Variable", data: { VariableName: "Name" } },
   Flow: { concept: "SequenceFlow", data: { TransitionCondition: "Condition" } },
-  Draw: { concept: "RandomGenerator", data: { Distribution: "Distribution" } },
+  Draw: { concept: "RandomGenerator", data: { DistributionType: "Type", DiscreteDistribution: "Distribution", Mean: "Mean", StandardDeviation: "SD", Minimum: "Min", Maximum: "Max" } },
 };
 
 // ---------------------------------------------------------------------------------
@@ -59,6 +61,7 @@ const MAPPING: LanguageMapping = {
 // ---------------------------------------------------------------------------------
 
 const name = (id: string, value: string) => ({ uuid: `${id}-name`, uuid_attribute: NAME_ATTRIBUTE_UUID, value, table_attributes: [] }); // an element's Name attribute instance
+const plain = (id: string, uuidAttribute: string, value: string) => ({ uuid: `${id}-${uuidAttribute}`, uuid_attribute: uuidAttribute, value, table_attributes: [] }); // an instance of an attribute that is no table
 
 /** A table attribute instance holding `rows`. Its cells are stored in reverse, so the test proves the column order comes from the metamodel. */
 const table = (uuid: string, uuidAttribute: string, columns: string[], rows: string[][]) => ({
@@ -121,7 +124,7 @@ describe("transformModel: test model A (draw and decision)", () => {
       flow("f2", "check", "dec", EMPTY_ROW), // unconditional
       flow("f3", "dec", "endja", ["lager", "==", "ja", "-"]), // lager = ja
       flow("f4", "dec", "endnein", ["lager", "==", "nein", "-"]), // lager = nein
-      line("g", "m-draw", "check", "lager", [table("g-dist", "m-distribution", DISTRIBUTION, [["ja", "0,8"], ["nein", "0.2"], ["", ""]])]), // 80/20, with a comma and a dot
+      line("g", "m-draw", "check", "lager", [plain("g", "m-type", "Discrete"), table("g-dist", "m-distribution", DISTRIBUTION, [["ja", "0,8"], ["nein", "0.2"], ["", ""]])]), // 80/20, with a comma and a dot
     ],
   );
 
@@ -146,7 +149,8 @@ describe("transformModel: test model A (draw and decision)", () => {
           label: "Name", // its default name
           node: "check", // drawn at Check stock
           variable: "lager", // into lager
-          distribution: [{ value: "ja", probability: 0.8 }, { value: "nein", probability: 0.2 }], // "0,8" read like "0.2"; the empty row skipped
+          distribution: { type: "Discrete", entries: [{ value: "ja", probability: 0.8 }, { value: "nein", probability: 0.2 }] }, // "0,8" read like "0.2"; the empty row skipped
+          unmapped: [], // the test language maps every data a draw needs
         },
       },
       variables: { lager: { id: "lager", label: "lager", name: "lager" } },
@@ -256,13 +260,40 @@ describe("transformModel: data", () => {
     expect(graph.flows.f.condition?.[0].variableName).toBe("lager"); // the stored text is kept
     expect(graph.issues).toEqual([{ elementId: "f", message: 'A row of the TransitionCondition of "Name" refers to "lager", which belongs to another model.' }]); // reported on the flow (spec 10, check 2)
   });
+
+  // A draw of type `type` with the given parameter texts and a filled distribution table, which only Discrete reads.
+  const typedDraw = (type: string, parameters: Record<string, string> = {}) =>
+    line("g", "m-draw", "check", "lager", [plain("g", "m-type", type), ...Object.entries(parameters).map(([uuid, value]) => plain("g", uuid, value)), table("g-dist", "m-distribution", DISTRIBUTION, [["ja", "1"]])]);
+  const distributionOf = (draw: object, mapping = MAPPING) => transformModel(sceneType, scene([box("check", "Task", "Check"), box("lager", "Var", "lager")], [draw]), mapping).generators.g;
+
+  it("reads only the parameters of the generator's distribution type", () => {
+    expect(distributionOf(typedDraw("Normal", { "m-mean": "100", "m-sd": "15,5", "m-min": "1" })).distribution).toEqual({ type: "Normal", mean: 100, standardDeviation: 15.5 }); // a comma like a dot; Min and the table are ignored
+    expect(distributionOf(typedDraw("Uniform", { "m-min": "10", "m-max": "20" })).distribution).toEqual({ type: "Uniform", minimum: 10, maximum: 20 });
+    expect(distributionOf(typedDraw("Exponential", { "m-mean": " 30 " })).distribution).toEqual({ type: "Exponential", mean: 30 }); // trimmed
+  });
+
+  it("reads an empty or unreadable parameter as null", () => {
+    expect(distributionOf(typedDraw("Uniform", { "m-min": "", "m-max": "abc" })).distribution).toEqual({ type: "Uniform", minimum: null, maximum: null }); // reported by check 12
+  });
+
+  it("keeps a distribution type it does not know as written", () => {
+    expect(distributionOf(typedDraw("Poisson")).distribution).toEqual({ type: "Unsupported", written: "Poisson" }); // reported by check 14
+    expect(distributionOf(typedDraw("not defined")).distribution).toEqual({ type: "Unsupported", written: "" }); // never set: no type chosen
+  });
+
+  it("lists the data the type needs that the mapping names no attribute for", () => {
+    const withoutMean: LanguageMapping = { ...MAPPING, Draw: { concept: "RandomGenerator", data: { DistributionType: "Type", StandardDeviation: "SD" } } };
+    expect(distributionOf(typedDraw("Normal", { "m-sd": "15" }), withoutMean).unmapped).toEqual(["Mean"]); // StandardDeviation is mapped
+    expect(distributionOf(typedDraw("Discrete"), withoutMean).unmapped).toEqual(["DiscreteDistribution"]); // the table is needed now
+    expect(distributionOf(typedDraw("Normal"), { ...MAPPING, Draw: { concept: "RandomGenerator" } }).unmapped).toEqual(["DistributionType"]); // without a type, nothing else is known to be needed
+  });
 });
 
 describe("transformModel: elements that cannot carry their concept", () => {
   it("finds node and variable of a draw by their concepts, in either direction", () => {
-    const reversed = line("g", "m-draw", "lager", "check"); // drawn from the variable to the node, without a distribution table
+    const reversed = line("g", "m-draw", "lager", "check", [plain("g", "m-type", "Discrete")]); // drawn from the variable to the node, without a distribution table
     const graph = transformModel(sceneType, scene([box("check", "Task", "Check"), box("lager", "Var", "lager")], [reversed]), MAPPING);
-    expect(graph.generators.g).toMatchObject({ node: "check", variable: "lager", distribution: [] }); // direction does not matter; a missing table reads as empty
+    expect(graph.generators.g).toMatchObject({ node: "check", variable: "lager", distribution: { type: "Discrete", entries: [] } }); // direction does not matter; a missing table reads as empty
     expect(graph.issues).toEqual([]); // nothing to report
   });
 

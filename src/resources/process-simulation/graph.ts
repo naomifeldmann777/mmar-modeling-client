@@ -20,9 +20,9 @@
  *
  * Source: spec 7 (nodes are executed, sequence flows carry the tokens, variables and
  * random generators are neither), spec 6 (variables, draws, conditions), spec 5.2 (a
- * TransitionCondition becomes a guard, a Distribution lists the values to draw).
+ * TransitionCondition becomes a guard, a distribution determines the values to draw).
  */
-import type { NodeConcept } from "./vocabulary"; // the graph only ever speaks in concepts
+import type { DataConcept, NodeConcept } from "./vocabulary"; // the graph only ever speaks in concepts
 
 /** The whole graph of one model. Each part is keyed by element uuid, for direct lookup. */
 export interface SimulationGraph {
@@ -76,10 +76,27 @@ export interface GraphGenerator {
   label: string; // its name, so messages can name it
   node: string | null; // uuid of the node at which the value is drawn; null when it cannot be determined
   variable: string | null; // uuid of the variable the value is written to; null likewise
-  // The values that can be drawn, with their probabilities. null: no Distribution
-  // attribute is mapped. Only discrete distributions exist in this version (spec 10, check 14).
-  distribution: DistributionEntry[] | null;
+  distribution: Distribution; // what the value is drawn from, as its DistributionType says
+  // The data this generator needs for which the mapping of its class names no attribute:
+  // DistributionType, and the data its type reads (spec 2.2). Reported by check 3.
+  unmapped: DataConcept[];
 }
+
+/**
+ * What a generator draws from: one variant per distribution type, each with only the data
+ * that type reads (spec 2.2). A parameter is null when it is empty or not a number (check 12).
+ *
+ * Examples:
+ *   { type: "Discrete", entries: [{ value: "ja", probability: 0.8 }, { value: "nein", probability: 0.2 }] }
+ *   { type: "Normal", mean: 100, standardDeviation: 15 }
+ *   { type: "Unsupported", written: "Poisson" }     (check 14; written is "" when no type is chosen)
+ */
+export type Distribution =
+  | { type: "Discrete"; entries: DistributionEntry[] } // [] when the table holds no filled row
+  | { type: "Normal"; mean: number | null; standardDeviation: number | null } // reads Mean and StandardDeviation
+  | { type: "Uniform"; minimum: number | null; maximum: number | null } // reads Minimum and Maximum
+  | { type: "Exponential"; mean: number | null } // reads Mean
+  | { type: "Unsupported"; written: string }; // the DistributionType names no type of DISTRIBUTION_TYPES (vocabulary.ts)
 
 /** One value of a discrete distribution. */
 export interface DistributionEntry {

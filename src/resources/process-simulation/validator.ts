@@ -15,9 +15,10 @@
  * Decisions taken in Phase 5:
  * - All 22 checks of spec 10 are implemented, and every failed check is an error.
  * - Check 2 also covers what the transformer could not translate (graph.issues).
- * - Check 14 (only supported distribution types) needs no code: the attribute mapped as
- *   Distribution is read as a table "value | probability", which is a discrete distribution
- *   by its format.
+ * - Check 3 reports, for a random generator, its DistributionType and the data that type
+ *   reads (spec 2.2), each one the mapping of its class names no attribute for.
+ * - Check 14: the DistributionType is one of Discrete, Normal, Uniform and Exponential. Until
+ *   continuous draws are implemented, only Discrete is accepted.
  * - Check 17 also requires the operator to be one of ==, !=, <, <=, >, >= and the logical
  *   operator of every row after the first to be AND or OR, since the run could not evaluate
  *   anything else.
@@ -67,7 +68,7 @@ import { COMPARISON_OPERATORS, evaluateCondition, LOGICAL_OPERATORS, type Variab
 import type { GraphFlow, GraphGenerator, GraphNode, GraphVariable, SimulationGraph } from "./graph";
 import { parseDecimal } from "./numbers"; // checks 12 and 19 read numbers the same way as the run
 import { branchEnds, OR_PAIR, PARALLEL_PAIR } from "./pairs"; // check 24 uses the same branch ends as the firing rule
-import { WAITING_CONCEPTS, type NodeConcept } from "./vocabulary";
+import { DISTRIBUTION_TYPES, WAITING_CONCEPTS, type NodeConcept } from "./vocabulary"; // check 14 names the supported types
 
 /** One problem found by the validator. */
 export interface ValidationProblem {
@@ -143,9 +144,9 @@ function checkMapping({ graph, flows, generators, variables, nodes, withIssue, r
   for (const issue of graph.issues) report(2, issue.elementId, issue.message);
 
   // Check 3: where a concept carries a data concept, the attribute is assigned too.
-  for (const generator of generators) {
-    if (generator.distribution === null && !withIssue.has(generator.id)) {
-      report(3, generator.id, `Random generator "${generator.label}" has no Distribution: the simulation mapping of its class names no attribute for it.`);
+  for (const generator of generators.filter((candidate) => !withIssue.has(candidate.id))) {
+    for (const dataConcept of generator.unmapped) { // its DistributionType, and the data that type reads (spec 2.2)
+      report(3, generator.id, `Random generator "${generator.label}" has no ${dataConcept}: the simulation mapping of its class names no attribute for it.`);
     }
   }
   for (const variable of variables) {
@@ -268,8 +269,9 @@ function checkVariables({ variables, generators, withIssue, report, labelOf }: C
   for (const generator of generators) {
     // Check 11: every random generator refers to exactly one variable and lists at least one value.
     if (generator.variable === null && !withIssue.has(generator.id)) report(11, generator.id, `${describe(generator)} sets no variable.`);
-    if (generator.distribution?.length === 0) report(11, generator.id, `${describe(generator)} lists no value to draw.`);
-    const entries = generator.distribution ?? []; // the checks below need the values
+    const entries = generator.distribution.type === "Discrete" ? generator.distribution.entries : []; // checks 11 to 13 concern discrete distributions only
+    const readable = generator.unmapped.length === 0 && !withIssue.has(generator.id); // a table not mapped (check 3) or unreadable (check 2) is reported already
+    if (generator.distribution.type === "Discrete" && readable && entries.length === 0) report(11, generator.id, `${describe(generator)} lists no value to draw.`);
 
     // Check 12: the probabilities add up to one, within a small tolerance, and none is negative.
     for (const entry of entries) {
@@ -291,10 +293,17 @@ function checkVariables({ variables, generators, withIssue, report, labelOf }: C
       }
       seen.add(entry.value);
     }
-  }
 
-  // Check 14: needs no code (decided in Phase 5): a Distribution is read as a table
-  // "value | probability", which is a discrete distribution by its format.
+    // Check 14: the distribution type is one the simulation supports. For now that is only
+    // Discrete: drawing from Normal, Uniform and Exponential follows in the next steps.
+    const distribution = generator.distribution; // narrowed by its type below
+    if (generator.unmapped.includes("DistributionType")) continue; // not mapped: check 3
+    if (distribution.type === "Unsupported") {
+      report(14, generator.id, distribution.written === "" ? `${describe(generator)} has no distribution type.` : `${describe(generator)} uses the distribution type "${distribution.written}"; supported are ${DISTRIBUTION_TYPES.join(", ")}.`);
+    } else if (distribution.type !== "Discrete") {
+      report(14, generator.id, `${describe(generator)} uses a ${distribution.type} distribution, which the simulation cannot draw from yet.`); // removed once continuous draws are implemented
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------------
@@ -312,7 +321,7 @@ function checkConditions({ graph, nodes, flows, generators, variables, report, d
     const name = nameOf(generator.variable); // the variable this draw writes to
     if (!name) continue; // no variable, or one without a name: reported by checks 3, 10 or 11
     const domain = domains.get(name) ?? new Set<string>(); // shared by all draws into the same variable (e.g. test model F)
-    for (const entry of generator.distribution ?? []) domain.add(entry.value);
+    if (generator.distribution.type === "Discrete") for (const entry of generator.distribution.entries) domain.add(entry.value); // only discrete values can be listed
     domains.set(name, domain);
   }
 
