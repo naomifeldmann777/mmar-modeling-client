@@ -14,7 +14,10 @@
  *      path analysis, as in BEE-UP). The order does not change the result of a run (spec 7);
  *      fixing it keeps one way through the model from splitting into several paths that differ
  *      only in the order of parallel branches.
- *    - which value it draws: by the probabilities of the distribution (spec 6.2, 9).
+ *    - which values it draws: every random generator at the node draws one value with
+ *      `sample`, discrete or continuous, the same function as the stepper's "Draw" (spec 6.2,
+ *      9). The step with these values is taken; a continuous value is given to it with
+ *      `fixValues` (spec 7: picking such a step means giving the value).
  * 3. The step is carried out (operation 2), and the run is at 1 again, until an End element
  *    has run ("finished"), no step is possible ("noStep"), or MAX_STEPS steps have been taken
  *    ("aborted": e.g. a loop that kept being entered).
@@ -27,7 +30,9 @@
  *   its longest branch.
  *
  * A path is a trace, the sequence of executed nodes (spec 9). Since execution times are fixed,
- * every run of a path has the same execution time and cycle time.
+ * every run of a path has the same execution time and cycle time. The values drawn do not make
+ * a path: with a continuous distribution almost every run draws other numbers, but runs that
+ * execute the same nodes take the same path.
  *
  * Deliberately NOT here: no reading of the model, no display, no export. Nothing assumes a
  * user (plan 11). The random numbers come from a generator started with a seed, so the same
@@ -35,12 +40,13 @@
  *
  * Source: spec 9 and 9.1 (path analysis, times), spec 7 (the two operations), spec 6.2 (drawing).
  */
-import { executeStep, initialState, possibleSteps, type Draw, type Step } from "./firing"; // the two operations, shared with the stepper
+import { sample, type Drawable } from "./distributions"; // draws every value, as the stepper's "Draw" does
+import { executeStep, fixValues, initialState, possibleSteps, type Draw, type RunState, type Step } from "./firing"; // the two operations, shared with the stepper; fixValues gives a continuous value
 import type { SimulationGraph } from "./graph"; // what the analysis works on
 import { validateGraph, type ValidationProblem } from "./validator"; // checked before the first run, as for the stepper
 
 export const DEFAULT_RUNS = 1000; // what the panel proposes (decided for the path analysis)
-export const MAX_RUNS = 10000; // the most runs one analysis makes, so it stays fast in the browser
+export const MAX_RUNS = 100000; // the most runs one analysis makes: enough to find a path of 0.01 % (about 10 runs of it), and about 10 s in the browser
 export const MAX_STEPS = 1000; // the most steps one run takes; a run that reaches it is "aborted"
 
 // ---------------------------------------------------------------------------------
@@ -174,7 +180,8 @@ function analyseRun(graph: SimulationGraph, random: () => number): AnalysedRun {
   for (let count = 0; count < MAX_STEPS; count++) { // count: the number of this step, also its `placed` stamp
     const steps = possibleSteps(graph, state); // operation 1
     if (steps.length === 0) return { outcome: "noStep", trace, executionTime, cycleTime: null, path: null }; // stuck: refused by the validator in a sound model
-    const step = chooseStep(steps, stamps, random); // the system picks
+    const step = chooseStep(graph, state, steps, stamps, random); // the system picks
+    if (!step) return { outcome: "noStep", trace, executionTime, cycleTime: null, path: null }; // a drawn value leads nowhere: ruled out by checks 20 to 22, so counted, not hidden
 
     const start = Math.max(0, ...step.consumes.map((flowId) => stamps[flowId][0].available)); // a node starts once all its tokens are available; the Start at 0
     for (const flowId of step.consumes) stamps[flowId].shift(); // those tokens are gone
@@ -191,26 +198,30 @@ function analyseRun(graph: SimulationGraph, random: () => number): AnalysedRun {
 }
 
 /**
- * The step the system takes:
+ * The step the system takes, complete with its values:
  * 1. the node whose tokens were placed most recently, so one branch is advanced until it
  *    waits, then the next; among equals, the first in the list;
- * 2. among that node's steps, which differ only in the values drawn, one by the probabilities.
+ * 2. every random generator at that node draws one value with `sample`;
+ * 3. of that node's steps, the one with these discrete values; a continuous value, still open
+ *    in it, is given with fixValues.
+ * null when no step has the drawn values or no way out holds for them; checks 20 to 22 rule
+ * that out.
+ *
+ * Example: Check stock draws lager (ja 0.8 / nein 0.2) and amount ~ Normal (100, 15).
+ *   its steps    [lager = ja, amount open]   [lager = nein, amount open]
+ *   drawn        { g1: "nein", g2: "87.31243" }
+ *   taken        [lager = nein, amount = 87.31243]
  */
-function chooseStep(steps: Step[], stamps: Record<string, Stamp[]>, random: () => number): Step {
+function chooseStep(graph: SimulationGraph, state: RunState, steps: Step[], stamps: Record<string, Stamp[]>, random: () => number): Step | null {
   const recency = (step: Step) => Math.max(-1, ...step.consumes.map((flowId) => stamps[flowId][0].placed)); // when its tokens were placed; -1 for the Start, which takes none
   const latest = Math.max(...steps.map(recency)); // the most recent of all
   const nodeId = steps.find((step) => recency(step) === latest)!.node; // the first node with it; `!` because some step has it
-  const options = steps.filter((step) => step.node === nodeId); // its steps: one per combination of drawn values
-  if (options.length === 1) return options[0]; // nothing drawn, or only one value possible
+  const options = steps.filter((step) => step.node === nodeId); // its steps: one per combination of discrete values, each with the same generators
 
-  const weights = options.map((step) => step.draws.reduce((product, draw) => product * (draw.probability ?? 0), 1)); // e.g. ja 0.8, nein 0.2; two draws multiply
-  const total = weights.reduce((sum, weight) => sum + weight, 0); // 1 after the validator (check 12), unless a value leads nowhere
-  let threshold = random() * total; // a point between 0 and the total
-  for (let i = 0; i < options.length; i++) {
-    threshold -= weights[i]; // walk along the values until the point is passed
-    if (threshold < 0) return options[i]; // this value is drawn
-  }
-  return options[options.length - 1]; // only when rounding leaves the point at the very end
+  const drawn = Object.fromEntries(options[0].draws.map((draw) => [draw.generator, sample(graph.generators[draw.generator].distribution as Drawable, random)])); // one value per generator, in the order of the steps' draws; `as`: an Unsupported type is refused by check 14
+  const step = options.find((option) => option.draws.every((draw) => draw.value === null || draw.value === drawn[draw.generator])); // the step with the drawn discrete values; a node that draws nothing has one step
+  if (!step) return null; // a drawn discrete value leads nowhere
+  return step.draws.some((draw) => draw.value === null) ? fixValues(graph, state, step, drawn) : step; // a continuous value decides now where the token goes
 }
 
 // ---------------------------------------------------------------------------------

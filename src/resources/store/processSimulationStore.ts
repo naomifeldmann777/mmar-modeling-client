@@ -28,13 +28,17 @@ interface ProcessSimulationState {
   run: Run | null; // the current run; null while the stepper is closed or the run could not start
   problems: ValidationProblem[]; // why the run could not start (spec 8, step 1); empty otherwise
   message: string | null; // a problem before the validator, e.g. the model's metamodel has no mapping
+  stepMessage: string | null; // why the value the user gave for a continuous draw was refused; null otherwise
 
   /** Opens the stepper on `graph`: runs the validator and starts the run, or keeps the problems. */
   open: (sceneInstanceId: string, graph: SimulationGraph) => void;
   /** Opens the stepper with a message instead of a run, when not even a graph could be built. */
   openWithMessage: (sceneInstanceId: string, message: string) => void;
-  /** Carries out the step the user picked; it must be one of `run.steps`. */
-  pick: (step: Step) => void;
+  /**
+   * Carries out the step the user picked; it must be one of `run.steps`. `values` gives the
+   * value of every open (continuous) draw, by generator uuid, as typed or drawn.
+   */
+  pick: (step: Step, values?: Readonly<Record<string, string>>) => void;
   /** Starts the run again from the beginning, on the same graph: the model is locked, so it has not changed. */
   restart: () => void;
   /** Closes the stepper ("Stop simulation"): no run, no panel, no lock. */
@@ -43,7 +47,7 @@ interface ProcessSimulationState {
   reset: () => void;
 }
 
-const CLOSED = { active: false, sceneInstanceId: null, run: null, problems: [], message: null }; // the state while the stepper is not open
+const CLOSED = { active: false, sceneInstanceId: null, run: null, problems: [], message: null, stepMessage: null }; // the state while the stepper is not open
 
 export const useProcessSimulationStore = create<ProcessSimulationState>((set, get) => ({
   ...CLOSED, // closed until the user starts the stepper
@@ -56,21 +60,24 @@ export const useProcessSimulationStore = create<ProcessSimulationState>((set, ge
       run: started.ok ? started.run : null, // the run, if it may start
       problems: started.ok ? [] : started.problems, // otherwise what keeps it from starting
       message: null, // a message of an earlier attempt no longer applies
+      stepMessage: null, // likewise
     });
   },
 
   openWithMessage: (sceneInstanceId, message) => set({ ...CLOSED, active: true, sceneInstanceId, message }), // the panel shows the message and "Stop simulation"
 
-  pick: (step) => {
+  pick: (step, values) => {
     const { run } = get(); // the run the user is looking at
-    if (run) set({ run: takeStep(run, step) }); // the new run replaces the old one; takeStep refuses a step that is not possible
+    if (!run) return; // no run: nothing to pick from
+    const result = takeStep(run, step, values); // takeStep refuses a step that is not possible, and checks the values
+    set(result.ok ? { run: result.run, stepMessage: null } : { stepMessage: result.message }); // the new run replaces the old one; a refused value leaves the run as it was and says why
   },
 
   restart: () => {
     const { run } = get(); // restart is only offered while a run exists
     if (!run) return; // nothing to restart: the run never started
     const started = startRun(run.graph); // validates again: passes, since the graph is the same
-    if (started.ok) set({ run: started.run }); // back to the token in front of the Start
+    if (started.ok) set({ run: started.run, stepMessage: null }); // back to the token in front of the Start
   },
 
   close: () => set(CLOSED), // "Stop simulation"

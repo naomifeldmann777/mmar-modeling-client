@@ -5,12 +5,14 @@
  *
  * Used by: the stepper and later the path analysis. Both pick one of the possible steps
  * whenever there is more than one (spec 7, 8). That happens in two situations:
- * - A value is drawn at a node: there is one step per value of the distribution, so picking a
- *   step means picking the value. The path at a Decision or OR-Split is never picked; it
- *   follows from the values and the conditions ("the user chooses a value, not a path").
+ * - A value is drawn at a node: there is one step per value of a discrete distribution, so
+ *   picking a step means picking the value. The path at a Decision or OR-Split is never
+ *   picked; it follows from the values and the conditions ("the user chooses a value, not a
+ *   path"). A continuous distribution has infinitely many values, so there is a single step
+ *   whose value is left open; picking it means giving the value as well (`fixValues`).
  * - Several branches are active at once: there is one step per node that can fire, so picking
  *   a step means picking which branch to advance. This only changes the order, not the result.
- * In the stepper the user picks; in the path analysis the system draws by the probabilities.
+ * In the stepper the user picks; in the path analysis the system draws from the distributions.
  * Nothing here knows who picks, so nothing here assumes a user (plan 11).
  *
  * Deliberately NOT here:
@@ -31,7 +33,7 @@
  *   its OR-Join (`orBranchEnds` in pairs.ts); the validator makes sure this is unambiguous (check 24).
  * - Elements take no time (spec 5.1), and exactly one step is carried out at a time (spec 7).
  *
- * Source: spec 7 (the two operations), spec 5.2 (the modules of the concepts), spec 5.3
+ * Source: spec 7 (the two operations, and one step per value only for a discrete distribution), spec 5.2 (the modules of the concepts), spec 5.3
  * (only AND-Join, OR-Join and SynchronizedActivity wait), spec 6 (draws and conditions).
  */
 import { evaluateCondition, type VariableValues } from "./condition"; // the conditions on the outgoing flows decide where a Decision or OR-Split sends its token
@@ -51,8 +53,8 @@ export interface RunState {
 export interface Draw {
   generator: string; // uuid of the random generator, so the drawn value can be shown on it
   variableName: string; // the variable it is written to, by name as conditions use it
-  value: string; // the value drawn if this step is chosen; the other values are other steps
-  probability: number | null; // shown to the user for information only (spec 8); used by the path analysis
+  value: string | null; // the value drawn if this step is chosen; the other values are other steps. null: a continuous draw, given by fixValues
+  probability: number | null; // of a discrete value, shown to the user for information only (spec 8); null for a continuous draw
 }
 
 /** One possible step: one node, with the binding it would fire with (spec 7). */
@@ -61,7 +63,7 @@ export interface Step {
   fromSource: boolean; // true only for the Start: it takes the token from the source place
   consumes: string[]; // flows it would take a token from
   draws: Draw[]; // values it would draw; empty when nothing is drawn at the node
-  produces: string[]; // flows it would put a token on: the branches that are entered
+  produces: string[]; // flows it would put a token on: the branches that are entered; [] until fixValues while a value is open
   skips: string[]; // OR-Split only: flows that would get a skip token, i.e. the ends of the branches not taken (spec 5.2)
 }
 
@@ -81,7 +83,8 @@ export function initialState(): RunState {
  * values it draws, and on which flows it puts tokens. Several nodes can have steps at the
  * same time, e.g. after an AND-Split one per branch; the user picks which one runs next.
  * A node can also offer several steps itself:
- * - it draws a value: one step per value of the distribution;
+ * - it draws a value: one step per value of a discrete distribution, one open step for a
+ *   continuous one (spec 7);
  * - it is a Decision or OR-Split that draws: the steps also differ in where the token goes,
  *   because the drawn value decides which conditions hold.
  * A node that cannot run (no token, or a waiting node still missing one) offers no step.
@@ -96,7 +99,11 @@ export function possibleSteps(graph: SimulationGraph, state: RunState): Step[] {
     const consumes = tokensToConsume(node, state, hasToken); // 2. can it run, and which tokens does it take?
     if (!consumes) continue; // it cannot run now: no step for this node
     for (const draws of drawOptions(graph, node.id)) { // 3. which values can it draw? No generator: exactly one way, drawing nothing
-      const values = { ...state.values, ...Object.fromEntries(draws.map((draw) => [draw.variableName, draw.value])) }; // the values after this draw; a draw replaces the old value (spec 6.2)
+      if (draws.some((draw) => draw.value === null)) { // a continuous draw: the value is given when the step is picked (spec 7)
+        steps.push({ node: node.id, fromSource: node.concept === "Start", consumes, draws, produces: [], skips: [] }); // where its tokens go follows from the value, in fixValues
+        continue; // its ways out cannot be known yet
+      }
+      const values = valuesAfter(state.values, draws); // the values after this draw; a draw replaces the old value (spec 6.2)
       for (const { produces, skips } of outgoingOptions(graph, node, values, branchEnds)) { // 4. where do its tokens go with these values? One way, except at a Decision or OR-Split
         steps.push({ node: node.id, fromSource: node.concept === "Start", consumes, draws, produces, skips }); // one step for this combination
       }
@@ -142,14 +149,15 @@ function tokensToConsume(node: GraphNode, state: RunState, hasToken: (flowId: st
  *   after lager:        [ [ja], [nein] ]                        every way so far, once per value of lager
  *   after kunde:        [ [ja, premium], [ja, normal], [nein, premium], [nein, normal] ]
  * So the node offers four steps. With one generator it is one step per value; with none, one
- * step that draws nothing.
+ * step that draws nothing. A continuous generator adds no values but one open draw (value
+ * null) to every way, e.g. lager (ja / nein) and amount (Normal): [ [ja, ?], [nein, ?] ].
  */
 function drawOptions(graph: SimulationGraph, nodeId: string): Draw[][] {
   const generators = Object.values(graph.generators).filter((generator) => generator.node === nodeId && generator.variable); // the draws attached to this node (spec 6.2); a generator without a variable has nowhere to write, so it draws nothing
   return generators.reduce<Draw[][]>( // take the generators one by one, each time extending the ways found so far
     (partial, generator) => // partial: the ways of the generators before this one; generator: the next one
       partial.flatMap((draws) => // every way so far is extended by every value of this generator; flatMap puts all the results into one flat list
-        (generator.distribution.type === "Discrete" ? generator.distribution.entries : []).map((entry) => [ // one new way per value in the distribution; other types are refused by check 14 for now
+        (generator.distribution.type === "Discrete" ? generator.distribution.entries : [{ value: null, probability: null }]).map((entry) => [ // one new way per value of a discrete distribution; one open way for a continuous one
           ...draws, // what the earlier generators of this node draw
           { generator: generator.id, variableName: graph.variables[generator.variable!]?.name ?? "", value: entry.value, probability: entry.probability }, // one value of this one; `!` because the filter above kept only generators with a variable
         ]),
@@ -175,6 +183,31 @@ function outgoingOptions(graph: SimulationGraph, node: GraphNode, values: Variab
   return [{ produces: node.outgoing, skips: [] }]; // every other node: a token on every outgoing flow (one for an Activity, all for an AND-Split or ForkActivity)
 }
 
+/**
+ * Completes a step with an open value: writes the given values into its open draws and works
+ * out where its tokens go with them (spec 7: picking such a step means giving the value).
+ * `values` holds a value per generator uuid; in the stepper the user enters it or lets it be
+ * drawn, in the path analysis the system draws it. Returns null when a value is missing, or
+ * when no way out holds for it, which the validator rules out (checks 21 and 22).
+ *
+ * Example: Decision "Betrag?" draws amount (Normal) itself, with amount < 100 → A and
+ * amount >= 100 → B.
+ *   step     { node: "dec", draws: [{ generator: "g", variableName: "amount", value: null }], produces: [] }
+ *   values   { g: "87.3" }
+ *   result   { node: "dec", draws: [{ generator: "g", variableName: "amount", value: "87.3" }], produces: ["A"] }
+ */
+export function fixValues(graph: SimulationGraph, state: RunState, step: Step, values: Readonly<Record<string, string>>): Step | null {
+  const draws = step.draws.map((draw) => (draw.value === null ? { ...draw, value: values[draw.generator] ?? null } : draw)); // fill the open ones, keep the discrete ones
+  if (draws.some((draw) => draw.value === null)) return null; // a value was not given
+  const [way] = outgoingOptions(graph, graph.nodes[step.node], valuesAfter(state.values, draws), orBranchEnds(graph)); // with the values known, a node has exactly one way out after the validator
+  return way ? { ...step, draws, ...way } : null; // the completed step; no way out only when the validator was bypassed
+}
+
+/** The values of the run after `draws`: every drawn value replaces the old one (spec 6.2). Every draw must have its value. */
+function valuesAfter(values: VariableValues, draws: Draw[]): VariableValues {
+  return { ...values, ...Object.fromEntries(draws.map((draw) => [draw.variableName, draw.value!])) }; // `!`: the callers pass only draws whose value is known
+}
+
 // ---------------------------------------------------------------------------------
 // Operation 2: execution
 // ---------------------------------------------------------------------------------
@@ -182,17 +215,18 @@ function outgoingOptions(graph: SimulationGraph, node: GraphNode, values: Variab
 /**
  * Carries out `step` (spec 7, operation 2): removes the tokens it consumes, writes the drawn
  * values, puts tokens on the flows it produces on (and the skip tokens), and appends the node
- * to the trace. Returns a new state and leaves the given one unchanged.
+ * to the trace. Returns a new state and leaves the given one unchanged. A step with an open
+ * value must first be completed with `fixValues`.
  */
 export function executeStep(state: RunState, step: Step): RunState {
+  if (step.draws.some((draw) => draw.value === null)) throw new Error("A step with an open value must be completed with fixValues before it is executed."); // a mistake of the caller, not of the model
   const tokens = { ...state.tokens }; // a copy, so the old state stays as it was
   for (const flowId of step.consumes) { // every flow the step takes a token from: one, or all inputs of a waiting node
     tokens[flowId] = (tokens[flowId] ?? 0) - 1; // take one token
     if (tokens[flowId] <= 0) delete tokens[flowId]; // a flow without token is absent from the marking
   }
   for (const flowId of [...step.produces, ...step.skips]) tokens[flowId] = (tokens[flowId] ?? 0) + 1; // put one token; a skip token is a token like any other
-  const values = { ...state.values }; // one store per run (Phase 6)
-  for (const draw of step.draws) values[draw.variableName] = draw.value; // the drawn value replaces the old one (spec 6.2)
+  const values = valuesAfter(state.values, step.draws); // one store per run (Phase 6); the drawn value replaces the old one (spec 6.2)
   return { // a new state object, so whoever holds the old one (e.g. the stepper's history) still sees it unchanged
     sourceToken: state.sourceToken && !step.fromSource, // the Start has taken the token in front of it
     tokens, // the new marking

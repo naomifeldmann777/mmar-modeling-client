@@ -13,7 +13,8 @@
  *
  * The model and the analysis (decided for B2):
  * - While the analysis runs, the model cannot change: it runs in one go, and the client does
- *   not take a click before it is done (at most MAX_RUNS runs, about a second).
+ *   not take a click before it is done (at most MAX_RUNS runs: about 1 s for 10 000, about
+ *   10 s for 100 000).
  * - Afterwards the model may be edited, unlike with the stepper: the result is a finished
  *   snapshot. Once the model differs from the analysed one, the store marks the result as
  *   outdated: the panel says so and the highlighted path goes, since it could sit in the

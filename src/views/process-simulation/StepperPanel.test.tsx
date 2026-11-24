@@ -76,6 +76,32 @@ describe("StepperPanel", () => {
     expect(mocks.showHighlights).toHaveBeenCalledTimes(5); // the 3D model follows every state: the beginning and four steps
   });
 
+  it("asks for the value of a continuous draw, refuses one the distribution cannot give, and draws one", () => {
+    const g = modelA();
+    g.generators.g.distribution = { type: "Uniform", minimum: 10, maximum: 20 }; // lager is now drawn continuously
+    g.flows.f3.condition = [{ variableName: "lager", operator: "<", value: "15", logicalOperator: null }];
+    g.flows.f4.condition = [{ variableName: "lager", operator: ">=", value: "15", logicalOperator: null }];
+    useProcessSimulationStore.getState().open("scene-1", g);
+    render(<StepperPanel />);
+    click('Start "Start"');
+
+    const field = screen.getByRole("textbox", { name: "lager" }); // one field for the open value
+    fireEvent.change(field, { target: { value: "25" } });
+    click('Activity "Check stock": lager ~ Uniform [10, 20]'); // the step names the distribution
+    expect(screen.getByText("lager cannot be 25: Uniform [10, 20] gives no value above 20.")).toBeTruthy(); // refused, the run waits
+
+    fireEvent.change(screen.getByRole("textbox", { name: "lager" }), { target: { value: "12,3456" } });
+    click('Activity "Check stock": lager ~ Uniform [10, 20]');
+    expect(screen.getByRole("cell", { name: "12.35" })).toBeTruthy(); // kept as 12.3456, shown with two decimals
+    expect(screen.getByRole("button", { name: 'Decision "In stock?" → Ship' })).toBeTruthy(); // 12.3456 < 15
+
+    click("Restart");
+    click('Start "Start"');
+    click("Draw"); // the value is drawn at random
+    expect(screen.queryByRole("textbox")).toBeNull(); // the step is taken: no open value left
+    expect(screen.queryByText("not drawn yet")).toBeNull(); // lager has a value
+  });
+
   it("goes back to the beginning on Restart", () => {
     useProcessSimulationStore.getState().open("scene-1", modelA());
     render(<StepperPanel />);

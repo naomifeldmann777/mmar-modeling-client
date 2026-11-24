@@ -76,7 +76,7 @@ describe("PathAnalysisPanel", () => {
   it("refuses to start with a number of runs out of range or a seed that is no whole number", () => {
     store().open("scene-1");
     render(<PathAnalysisPanel />);
-    fireEvent.change(screen.getByLabelText("Runs"), { target: { value: "20000" } }); // above MAX_RUNS
+    fireEvent.change(screen.getByLabelText("Runs"), { target: { value: "200000" } }); // above MAX_RUNS
     expect((screen.getByRole("button", { name: "Start" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText("Runs"), { target: { value: "100" } });
     fireEvent.click(screen.getByRole("checkbox", { name: "Seed" }));

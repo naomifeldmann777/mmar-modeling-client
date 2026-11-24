@@ -17,8 +17,7 @@
  * - Check 2 also covers what the transformer could not translate (graph.issues).
  * - Check 3 reports, for a random generator, its DistributionType and the data that type
  *   reads (spec 2.2), each one the mapping of its class names no attribute for.
- * - Check 14: the DistributionType is one of Discrete, Normal, Uniform and Exponential. Until
- *   continuous draws are implemented, only Discrete is accepted.
+ * - Check 14: the DistributionType is one of Discrete, Normal, Uniform and Exponential.
  * - Check 17 also requires the operator to be one of ==, !=, <, <=, >, >= and the logical
  *   operator of every row after the first to be AND or OR, since the run could not evaluate
  *   anything else.
@@ -29,6 +28,15 @@
  * - Checks 20 to 22 evaluate the conditions for every combination of the values the variables
  *   can be drawn with. This may report a combination that never occurs in a real run, but it
  *   never misses one that does.
+ *
+ * Added for continuous distributions (Normal, Uniform, Exponential; Phase 13):
+ * - Check 12 also checks their parameters: each one a number, the StandardDeviation of a
+ *   Normal and the Mean of an Exponential above 0, the Minimum of a Uniform below its Maximum.
+ * - Check 18: == and != on a variable drawn from a continuous distribution are refused, since
+ *   one exact number practically never occurs. A variable may be drawn discretely at one node
+ *   and continuously at another; it then counts as continuous here.
+ * - Checks 20 to 22 cannot try infinitely many numbers. They try test values instead, which
+ *   stand for all others exactly (see testValues).
  * - A check that depends on another is skipped for an element on which that other check
  *   already failed, so one mistake gives one message, not three.
  *
@@ -65,8 +73,9 @@
  * condition on a variable that has not been drawn is false).
  */
 import { COMPARISON_OPERATORS, evaluateCondition, LOGICAL_OPERATORS, type VariableValues } from "./condition";
-import type { GraphFlow, GraphGenerator, GraphNode, GraphVariable, SimulationGraph } from "./graph";
-import { parseDecimal } from "./numbers"; // checks 12 and 19 read numbers the same way as the run
+import { colourSet, type ColourSet } from "./distributions"; // the values a variable can take, for checks 18 to 22
+import type { ConditionRow, Distribution, GraphFlow, GraphGenerator, GraphNode, GraphVariable, SimulationGraph } from "./graph";
+import { parseDecimal, writeDecimal } from "./numbers"; // checks 12 and 19 read numbers the same way as the run; test values are written so conditions read them
 import { branchEnds, OR_PAIR, PARALLEL_PAIR } from "./pairs"; // check 24 uses the same branch ends as the firing rule
 import { DISTRIBUTION_TYPES, WAITING_CONCEPTS, type NodeConcept } from "./vocabulary"; // check 14 names the supported types
 
@@ -269,7 +278,7 @@ function checkVariables({ variables, generators, withIssue, report, labelOf }: C
   for (const generator of generators) {
     // Check 11: every random generator refers to exactly one variable and lists at least one value.
     if (generator.variable === null && !withIssue.has(generator.id)) report(11, generator.id, `${describe(generator)} sets no variable.`);
-    const entries = generator.distribution.type === "Discrete" ? generator.distribution.entries : []; // checks 11 to 13 concern discrete distributions only
+    const entries = generator.distribution.type === "Discrete" ? generator.distribution.entries : []; // checks 11 and 13, and the probabilities of check 12, concern discrete distributions only
     const readable = generator.unmapped.length === 0 && !withIssue.has(generator.id); // a table not mapped (check 3) or unreadable (check 2) is reported already
     if (generator.distribution.type === "Discrete" && readable && entries.length === 0) report(11, generator.id, `${describe(generator)} lists no value to draw.`);
 
@@ -282,6 +291,7 @@ function checkVariables({ variables, generators, withIssue, report, labelOf }: C
       const sum = entries.reduce((total, entry) => total + entry.probability!, 0); // only meaningful when every probability is a number
       if (Math.abs(sum - 1) > TOLERANCE) report(12, generator.id, `${describe(generator)}: the probabilities add up to ${Number(sum.toFixed(6))}, not 1.`);
     }
+    if (generator.unmapped.length === 0) for (const problem of parameterProblems(generator.distribution)) report(12, generator.id, `${describe(generator)}: ${problem}`); // a continuous distribution: its parameters (Phase 13); an unmapped one is check 3. Unlike the table, a parameter is readable also when the generator is drawn wrongly (check 2)
 
     // Check 13: no value appears twice within the same distribution.
     const seen = new Set<string>(); // the values met so far
@@ -294,15 +304,34 @@ function checkVariables({ variables, generators, withIssue, report, labelOf }: C
       seen.add(entry.value);
     }
 
-    // Check 14: the distribution type is one the simulation supports. For now that is only
-    // Discrete: drawing from Normal, Uniform and Exponential follows in the next steps.
+    // Check 14: the distribution type is one the simulation supports: Discrete, Normal, Uniform or Exponential.
     const distribution = generator.distribution; // narrowed by its type below
     if (generator.unmapped.includes("DistributionType")) continue; // not mapped: check 3
     if (distribution.type === "Unsupported") {
       report(14, generator.id, distribution.written === "" ? `${describe(generator)} has no distribution type.` : `${describe(generator)} uses the distribution type "${distribution.written}"; supported are ${DISTRIBUTION_TYPES.join(", ")}.`);
-    } else if (distribution.type !== "Discrete") {
-      report(14, generator.id, `${describe(generator)} uses a ${distribution.type} distribution, which the simulation cannot draw from yet.`); // removed once continuous draws are implemented
     }
+  }
+}
+
+/**
+ * What is wrong with the parameters of a continuous distribution (check 12, spec 2.2): every
+ * parameter a number, and the distribution must exist with them. [] when nothing is wrong, and
+ * for Discrete (checked above) and Unsupported (check 14). Examples:
+ *   Normal (μ = 100, σ = 0)   -> ["the StandardDeviation must be greater than 0."]
+ *   Uniform [20, 10]          -> ["the Minimum must be less than the Maximum."]
+ */
+function parameterProblems(distribution: Distribution): string[] {
+  const number = (value: number | null, name: string) => (value === null ? [`the ${name} is not a number.`] : []); // empty or not a number, as the transformer read it
+  const positive = (value: number | null, name: string) => (value === null ? number(value, name) : value <= 0 ? [`the ${name} must be greater than 0.`] : []); // a spread or a mean waiting time of 0 or less has no distribution
+  switch (distribution.type) {
+    case "Normal": return [...number(distribution.mean, "Mean"), ...positive(distribution.standardDeviation, "StandardDeviation")]; // the Mean may be any number, also negative
+    case "Uniform": {
+      const missing = [...number(distribution.minimum, "Minimum"), ...number(distribution.maximum, "Maximum")]; // both ends must be numbers
+      if (missing.length > 0) return missing; // the order of the ends can only be checked between numbers
+      return distribution.minimum! < distribution.maximum! ? [] : ["the Minimum must be less than the Maximum."]; // equal ends leave no interval to draw from
+    }
+    case "Exponential": return positive(distribution.mean, "Mean"); // the mean waiting time
+    default: return []; // Discrete and Unsupported: see above
   }
 }
 
@@ -314,16 +343,21 @@ function checkConditions({ graph, nodes, flows, generators, variables, report, d
   const nameOf = (variableId: string | null) => (variableId ? (graph.variables[variableId]?.name ?? null) : null); // the name a draw writes to
   const names = new Set(variables.map((variable) => variable.name).filter((name): name is string => !!name)); // the names conditions may use
 
-  // The values a variable can take: every value of every distribution that draws into it.
+  // The values a variable can take: the colour set of every distribution that draws into it,
+  // i.e. the values of a discrete one and the interval of a continuous one (spec 6.1).
   // A name is in this map exactly when some random generator draws into it.
-  const domains = new Map<string, Set<string>>();
+  const domains = new Map<string, ColourSet[]>();
+  const continuous = new Set<string>(); // names drawn from a continuous distribution somewhere, even one with a broken parameter (check 18)
   for (const generator of generators) {
     const name = nameOf(generator.variable); // the variable this draw writes to
     if (!name) continue; // no variable, or one without a name: reported by checks 3, 10 or 11
-    const domain = domains.get(name) ?? new Set<string>(); // shared by all draws into the same variable (e.g. test model F)
-    if (generator.distribution.type === "Discrete") for (const entry of generator.distribution.entries) domain.add(entry.value); // only discrete values can be listed
+    const domain = domains.get(name) ?? []; // shared by all draws into the same variable (e.g. test model F)
+    const distribution = generator.distribution; // what it draws from
+    if (distribution.type !== "Discrete" && distribution.type !== "Unsupported") continuous.add(name); // Normal, Uniform or Exponential
+    if (distribution.type !== "Unsupported" && parameterProblems(distribution).length === 0) domain.push(colourSet(distribution)); // a broken parameter (check 12) gives no interval; an unknown type (check 14) no values
     domains.set(name, domain);
   }
+  const discreteValues = (domain: ColourSet[]) => [...new Set(domain.flatMap((set) => ("values" in set ? set.values : [])))]; // the listed values, each once
 
   const broken = new Set<string>(); // flows whose condition cannot be evaluated; checks 20 to 22 skip their node
 
@@ -377,14 +411,21 @@ function checkConditions({ graph, nodes, flows, generators, variables, report, d
         continue;
       }
 
-      // Check 18: with == or !=, the compared value appears in the variable's distribution.
-      if ((row.operator === "==" || row.operator === "!=") && !domain.has(row.value)) {
-        report(18, flow.id, `${where} compares "${row.variableName}" with "${row.value}", which is not one of its values (${[...domain].join(", ")}).`);
+      // Check 18: with == or !=, the compared value appears in the variable's distribution. A
+      // continuous variable has no listed values, and one exact number practically never occurs
+      // (Phase 13).
+      if ((row.operator === "==" || row.operator === "!=") && continuous.has(row.variableName)) {
+        report(18, flow.id, `${where} compares "${row.variableName}" using ${row.operator}, but "${row.variableName}" is drawn from a continuous distribution, where one exact value practically never occurs. Compare it using <, <=, > or >=.`);
+        broken.add(flow.id); // checks 20 to 22 would only repeat this mistake
+        continue; // the row is not checked any further
+      }
+      if ((row.operator === "==" || row.operator === "!=") && !discreteValues(domain).includes(row.value)) {
+        report(18, flow.id, `${where} compares "${row.variableName}" with "${row.value}", which is not one of its values (${discreteValues(domain).join(", ")}).`);
       }
 
       // Check 19: <, <=, > and >= only on variables all of whose values are numbers.
       if (NUMERIC_OPERATORS.includes(row.operator)) {
-        const notNumbers = [...domain].filter((value) => parseDecimal(value) === null); // values that cannot be compared as numbers
+        const notNumbers = discreteValues(domain).filter((value) => parseDecimal(value) === null); // listed values that cannot be compared as numbers; a continuous one only gives numbers
         if (notNumbers.length > 0) {
           report(19, flow.id, `${where} uses ${row.operator} on "${row.variableName}", whose values are not all numbers ("${notNumbers[0]}").`);
           broken.add(flow.id);
@@ -413,10 +454,12 @@ function checkConditions({ graph, nodes, flows, generators, variables, report, d
   for (const node of nodes.filter((candidate) => DECIDING.includes(candidate.concept))) {
     const outgoing = node.outgoing.map((id) => graph.flows[id]); // the branches
     if (outgoing.length === 0 || outgoing.some((flow) => flow.condition === null || broken.has(flow.id))) continue; // reported by checks 3, 6, 15, 17 or 19
-    const read = [...new Set(outgoing.flatMap((flow) => flow.condition!.map((row) => row.variableName)))]; // the variables the conditions read
+    const rows = outgoing.flatMap((flow) => flow.condition!); // every row at this node
+    const read = [...new Set(rows.map((row) => row.variableName))]; // the variables the conditions read
+    const tried = new Map(read.map((name) => [name, testValues(name, rows, domains.get(name) ?? [])])); // the values tried for each of them
     const reportedChecks = new Set<number>(); // one message per check and node is enough
 
-    for (const values of combinations(read, domains)) {
+    for (const values of combinations(read, tried)) {
       const holding = outgoing.filter((flow) => evaluateCondition(flow.condition, values)); // the branches whose condition holds
       const when = read.length === 0 ? "in every case" : `when ${read.map((name) => `${name} = ${values[name]}`).join(", ")}`; // the combination, for the message
       const targets = (branches: GraphFlow[]) => branches.map((flow) => `"${labelOf(flow.target)}"`).join(" and "); // branches named by where they lead
@@ -964,10 +1007,43 @@ function drawnOnEveryPath(
   return drawn;
 }
 
+/**
+ * The values of `name` that checks 20 to 22 try at one node, given the condition `rows` there:
+ * every listed value of its discrete distributions, and for its continuous ones a few numbers
+ * that stand for all the others.
+ *
+ * Why a few numbers are enough: a condition compares a variable with a fixed number, never with
+ * another variable (condition.ts). So the result of every row can only change at the numbers
+ * written in the rows. Between two neighbouring ones, below the smallest and above the largest,
+ * every number gives the same results. One number from each of these stretches, and the numbers
+ * themselves, therefore try every case that can occur: the numbers, the midpoints between
+ * neighbours, one below the smallest and one above the largest. Where an interval begins or
+ * ends inside a stretch, the midpoint may lie outside it, so the ends of the intervals are tried
+ * as well. Only numbers the variable can take are kept.
+ *
+ * Example: amount ~ Uniform [10, 20], rows amount < 15 and amount > 30.
+ *   numbers 15, 30 → tried 15, 30, 22.5, 14, 31, 10, 20 → kept 15, 14, 10, 20
+ *   With amount = 15 no condition holds: check 21 reports it.
+ */
+function testValues(name: string, rows: ConditionRow[], domain: ColourSet[]): string[] {
+  const listed = domain.flatMap((set) => ("values" in set ? set.values : [])); // of the discrete distributions
+  const intervals = domain.filter((set): set is { from: number; to: number } => "from" in set); // of the continuous ones
+  if (intervals.length === 0) return [...new Set(listed)]; // only discrete: every value, as before Phase 13
+  const numbers = [...new Set(rows.filter((row) => row.variableName === name).map((row) => parseDecimal(row.value)).filter((value): value is number => value !== null))].sort((a, b) => a - b); // the numbers it is compared with, ascending; == rows on it are refused by check 18
+  const candidates = [
+    ...numbers, // where a result can change
+    ...numbers.slice(1).map((value, index) => (numbers[index] + value) / 2), // one number between each two neighbours
+    ...(numbers.length > 0 ? [numbers[0] - 1, numbers[numbers.length - 1] + 1] : [0]), // one below and one above; without numbers every value gives the same results, so any one will do
+    ...intervals.flatMap(({ from, to }) => [from, to]).filter(Number.isFinite), // where an interval ends inside a stretch; Normal has no ends
+  ];
+  const possible = candidates.filter((value) => intervals.some(({ from, to }) => from <= value && value <= to)); // only what can be drawn
+  return [...new Set([...listed, ...possible.map(writeDecimal)])]; // as text, like a drawn value
+}
+
 /** Every combination of values for `names`, e.g. lager ∈ {ja, nein} × kunde ∈ {premium} → 2 combinations. */
-function combinations(names: string[], domains: Map<string, Set<string>>): VariableValues[] {
+function combinations(names: string[], domains: Map<string, string[]>): VariableValues[] {
   return names.reduce<VariableValues[]>(
-    (partial, name) => partial.flatMap((values) => [...(domains.get(name) ?? [])].map((value) => ({ ...values, [name]: value }))), // extend every partial combination by every value of the next variable
+    (partial, name) => partial.flatMap((values) => (domains.get(name) ?? []).map((value) => ({ ...values, [name]: value }))), // extend every partial combination by every value of the next variable
     [{}], // start: one combination that assigns nothing
   );
 }

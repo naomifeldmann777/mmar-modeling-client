@@ -265,8 +265,10 @@ describe("validateGraph: variables and random generators (checks 10 to 13)", () 
     expect(validateGraph(g).find((p) => p.check === 14)?.message).toContain("has no distribution type");
     g.generators.g.distribution = { type: "Unsupported", written: "Poisson" }; // a word the simulation does not know
     expect(validateGraph(g).find((p) => p.check === 14)?.message).toContain('"Poisson"; supported are Discrete, Normal, Uniform, Exponential');
-    g.generators.g.distribution = { type: "Normal", mean: 100, standardDeviation: 15 }; // known, but not drawn from yet
-    expect(validateGraph(g).find((p) => p.check === 14)?.message).toContain("cannot draw from yet");
+    for (const distribution of [{ type: "Normal", mean: 100, standardDeviation: 15 }, { type: "Uniform", minimum: 10, maximum: 20 }, { type: "Exponential", mean: 30 }] as const) {
+      g.generators.g.distribution = distribution; // the continuous types are supported since Phase 13
+      expect(checks(validateGraph(g))).not.toContain(14);
+    }
     g.generators.g.unmapped = ["DistributionType"]; // the type is not mapped at all
     expect(checks(validateGraph(g))).not.toContain(14); // check 3 says so; one mistake, one message
   });
@@ -716,5 +718,76 @@ describe("validateGraph: check 27 (execution times)", () => {
     });
     const shared = validateGraph(g).find((p) => p.elementId === "join")!; // the message on the shared join
     expect(shared.message).toContain('Give AND-Split "p2" its own AND-Join, and lead that into AND-Join "join".');
+  });
+});
+
+// ---------------------------------------------------------------------------------
+// Continuous distributions (Phase 13)
+// ---------------------------------------------------------------------------------
+
+/** Start → check (draws amount from `distribution`) → dec → a | b, with the conditions given. */
+function amountModel(distribution: GraphGenerator["distribution"], toA: ConditionRow[], toB: ConditionRow[]) {
+  const g = graph({
+    nodes: [node("start", "Start"), node("check", "Activity"), node("dec", "Decision"), node("a", "End"), node("b", "End")],
+    flows: [flow("f1", "start", "check"), flow("f2", "check", "dec"), flow("f3", "dec", "a", ...toA), flow("f4", "dec", "b", ...toB)],
+    generators: [draw("g", "check", "amount", [])],
+    variables: [variable("amount")],
+  });
+  g.generators.g.distribution = distribution; // replaces the empty discrete table of the builder
+  return g;
+}
+const NORMAL = { type: "Normal", mean: 100, standardDeviation: 15 } as const; // used throughout
+
+describe("validateGraph: continuous distributions (Phase 13)", () => {
+  it("a Decision that splits a normal value at 100 passes", () => {
+    expect(validateGraph(amountModel(NORMAL, [row("amount", "<", "100")], [row("amount", ">=", "100")]))).toEqual([]);
+  });
+
+  it("12: the parameters of a continuous distribution are numbers, and the distribution exists with them", () => {
+    const message = (distribution: GraphGenerator["distribution"]) => validateGraph(amountModel(distribution, [row("amount", "<", "100")], [row("amount", ">=", "100")])).filter((p) => p.check === 12).map((p) => p.message);
+    expect(message({ type: "Normal", mean: null, standardDeviation: 0 })).toEqual([
+      'Random generator "g" (check → amount): the Mean is not a number.',
+      'Random generator "g" (check → amount): the StandardDeviation must be greater than 0.',
+    ]);
+    expect(message({ type: "Uniform", minimum: 20, maximum: 10 })).toEqual(['Random generator "g" (check → amount): the Minimum must be less than the Maximum.']);
+    expect(message({ type: "Uniform", minimum: 10, maximum: null })).toEqual(['Random generator "g" (check → amount): the Maximum is not a number.']);
+    expect(message({ type: "Exponential", mean: -5 })).toEqual(['Random generator "g" (check → amount): the Mean must be greater than 0.']);
+    expect(message({ type: "Exponential", mean: 30 })).toEqual([]);
+    const misdrawn = amountModel({ type: "Normal", mean: 100, standardDeviation: 0 }, [row("amount", "<", "100")], [row("amount", ">=", "100")]);
+    misdrawn.issues = [{ elementId: "g", message: '"g" must connect an element mapped to a node concept with an element mapped to Variable.' }]; // a mistake of its own (check 2)
+    expect(checks(validateGraph(misdrawn))).toEqual([2, 12]); // both are reported, as for the probabilities of a discrete table
+  });
+
+  it("18: == and != on a continuous variable are refused, also when it is drawn discretely elsewhere", () => {
+    const g = amountModel(NORMAL, [row("amount", "==", "100")], [row("amount", "!=", "100")]);
+    expect(checks(validateGraph(g))).toEqual([18, 18]); // one message per row; checks 20 and 21 do not repeat it
+    g.generators.g2 = { ...draw("g2", "start", "amount", [["100", 1]]) }; // the same variable, drawn discretely at the Start
+    expect(validateGraph(g).filter((p) => p.check === 18)).toHaveLength(2); // still continuous at the Decision
+  });
+
+  it("21: test values find a gap between two conditions", () => {
+    const problems = validateGraph(amountModel(NORMAL, [row("amount", "<", "100")], [row("amount", ">", "100")])); // exactly 100 leads nowhere
+    expect(problems.map((p) => [p.check, p.message])).toEqual([[21, 'At Decision "dec", none of the outgoing conditions holds when amount = 100, so the run would get stuck.']]);
+  });
+
+  it("20: test values find an overlap of two conditions", () => {
+    const problems = validateGraph(amountModel(NORMAL, [row("amount", "<=", "100")], [row("amount", ">=", "100")])); // exactly 100 leads both ways
+    expect(checks(problems)).toEqual([20]);
+  });
+
+  it("21: only values the distribution can take are tried", () => {
+    const uniform = { type: "Uniform", minimum: 10, maximum: 20 } as const;
+    expect(validateGraph(amountModel(uniform, [row("amount", "<", "25")], [row("amount", ">", "30")]))).toEqual([]); // 25 to 30 lead nowhere, but amount is never above 20
+    const problems = validateGraph(amountModel(uniform, [row("amount", "<", "15")], [row("amount", ">", "30")])); // 15 to 20 lead nowhere
+    expect(problems.map((p) => p.message)).toEqual(['At Decision "dec", none of the outgoing conditions holds when amount = 15, so the run would get stuck.']);
+    const exponential = { type: "Exponential", mean: 30 } as const; // never negative
+    expect(validateGraph(amountModel(exponential, [row("amount", ">=", "0")], [row("amount", "<", "-10")]))).toEqual([]); // the second flow is never taken, which is no error
+  });
+
+  it("20 to 22: a continuous and a discrete variable are tried in every combination", () => {
+    const g = amountModel(NORMAL, [row("amount", "<", "100"), row("lager", "==", "ja", "AND")], [row("amount", ">=", "100")]); // amount < 100 with lager = nein leads nowhere
+    g.generators.g2 = draw("g2", "check", "lager", LAGER);
+    g.variables.lager = variable("lager");
+    expect(validateGraph(g).map((p) => p.message)).toEqual(['At Decision "dec", none of the outgoing conditions holds when amount = 99, lager = nein, so the run would get stuck.']);
   });
 });

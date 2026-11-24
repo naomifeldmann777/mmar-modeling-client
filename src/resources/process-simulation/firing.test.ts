@@ -4,7 +4,7 @@
  * with ids invented for the test.
  */
 import { describe, expect, it } from "vitest";
-import { executeStep, initialState, possibleSteps, type RunState } from "./firing";
+import { executeStep, fixValues, initialState, possibleSteps, type RunState } from "./firing";
 import type { ConditionRow, GraphFlow, GraphGenerator, GraphNode, SimulationGraph } from "./graph";
 import type { NodeConcept } from "./vocabulary";
 
@@ -168,5 +168,54 @@ describe("firing: test models of the OCPN Build Guide", () => {
       [draw("g", "check", "lager", LAGER)],
     );
     expect(possibleSteps(g, run(g, ["start"], ["check", "nein"]))).toEqual([]); // the run would get stuck here
+  });
+});
+
+// ---------------------------------------------------------------------------------
+// Continuous distributions: one open step, completed by fixValues
+// ---------------------------------------------------------------------------------
+
+describe("firing: continuous draws", () => {
+  const less = (value: string): ConditionRow => ({ variableName: "amount", operator: "<", value, logicalOperator: null }); // amount < value
+  const atLeast = (value: string): ConditionRow => ({ variableName: "amount", operator: ">=", value, logicalOperator: null }); // amount >= value
+  const normal = (id: string, at: string): GraphGenerator => ({ id, label: id, node: at, variable: "amount", distribution: { type: "Normal", mean: 100, standardDeviation: 15 }, unmapped: [] });
+
+  // Start → Decision "dec" (draws amount itself) → A if amount < 100, B otherwise.
+  const atDecision = graph(
+    [node("start", "Start"), node("dec", "Decision"), node("a", "End"), node("b", "End")],
+    [flow("f1", "start", "dec"), flow("fa", "dec", "a", less("100")), flow("fb", "dec", "b", atLeast("100"))],
+    [normal("g", "dec")],
+  );
+
+  it("offers a single step whose value is open and whose way out is not known yet", () => {
+    expect(possibleSteps(atDecision, run(atDecision, ["start"]))).toEqual([
+      { node: "dec", fromSource: false, consumes: ["f1"], draws: [{ generator: "g", variableName: "amount", value: null, probability: null }], produces: [], skips: [] },
+    ]);
+  });
+
+  it("fixValues writes the value and works out the way out with it", () => {
+    const state = run(atDecision, ["start"]);
+    const [open] = possibleSteps(atDecision, state);
+    expect(fixValues(atDecision, state, open, { g: "87.3" })).toMatchObject({ draws: [{ value: "87.3" }], produces: ["fa"] }); // 87.3 < 100
+    expect(fixValues(atDecision, state, open, { g: "100" })).toMatchObject({ produces: ["fb"] }); // 100 >= 100
+    expect(fixValues(atDecision, state, open, {})).toBeNull(); // no value given
+  });
+
+  it("executes a completed step like any other, and refuses an open one", () => {
+    const state = run(atDecision, ["start"]);
+    const [open] = possibleSteps(atDecision, state);
+    expect(() => executeStep(state, open)).toThrow("fixValues"); // the caller forgot to complete it
+    expect(executeStep(state, fixValues(atDecision, state, open, { g: "120.5" })!)).toMatchObject({ tokens: { fb: 1 }, values: { amount: "120.5" } });
+  });
+
+  it("keeps one step per discrete value, each with the continuous value open", () => {
+    const both = graph(
+      [node("start", "Start"), node("check", "Activity"), node("end", "End")],
+      [flow("f1", "start", "check"), flow("f2", "check", "end")],
+      [draw("gl", "check", "lager", LAGER), normal("ga", "check")],
+    );
+    const steps = possibleSteps(both, run(both, ["start"]));
+    expect(steps.map((step) => step.draws.map((d) => d.value))).toEqual([["ja", null], ["nein", null]]); // two steps, amount open in both
+    expect(fixValues(both, run(both, ["start"]), steps[1], { ga: "50" })).toMatchObject({ draws: [{ value: "nein" }, { value: "50" }], produces: ["f2"] }); // an Activity: its one outgoing flow
   });
 });

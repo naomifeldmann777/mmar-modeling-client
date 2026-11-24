@@ -10,7 +10,8 @@
  * - every token as a black dot with a white rim on its sequence flow, just in front of the
  *   element it waits for, as tokens are drawn in Petri nets; with a number when several
  *   tokens lie on one flow;
- * - next to every variable that has a value, a label "variable = value".
+ * - next to every variable that has a value, a label "variable = value", a number with more
+ *   than two decimals rounded to two.
  *
  * The glow, like a highlighter: a thin box line is hard to see, and WebGL draws plain lines
  * one pixel wide whatever width is asked for. So the glow is one see-through band with rounded
@@ -41,6 +42,7 @@ import * as THREE from "three"; // shapes, colours, bounding boxes
 import { Line2 } from "three/examples/jsm/lines/Line2.js"; // how the client draws lines: a token sits on one
 import { globalObject } from "@/engine"; // the active scene and camera, and the render flag
 import { createNameTag, disposeLabelSprite, scaleLabel, scaleLabelToText } from "@/resources/collaboration/label-sprite"; // camera-facing text labels
+import { displayValue } from "@/resources/process-simulation/numbers"; // a drawn number shown with at most two decimals
 import type { Run } from "@/resources/process-simulation/stepper"; // what is shown
 
 const POSSIBLE = { colour: "#00e676", opacity: 0.6 }; // bright, luminous green: this node can run now
@@ -73,7 +75,7 @@ export function showHighlights(run: Run): void {
 
   for (const variable of Object.values(run.graph.variables)) {
     const name = variable.name; // the name conditions use, and under which the value is kept
-    if (name && Object.hasOwn(run.state.values, name)) addLabel(scene, find(variable.id), `${name} = ${run.state.values[name]}`); // only once a value is drawn
+    if (name && Object.hasOwn(run.state.values, name)) addLabel(scene, find(variable.id), `${name} = ${displayValue(run.state.values[name])}`); // only once a value is drawn; at most two decimals
   }
 
   globalObject.render = true; // the scene is only redrawn when asked

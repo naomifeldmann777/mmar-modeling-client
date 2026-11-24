@@ -47,6 +47,12 @@ describe("sample", () => {
   it("gives the same values for the same seed", () => {
     expect(draws(NORMAL, 5)).toEqual(draws(NORMAL, 5)); // repeatable (spec 9)
   });
+
+  it("never writes a value in exponent notation, so a condition can read it", () => {
+    const tiny = sample({ type: "Exponential", mean: 1 }, () => 1e-7); // -ln(1 - 1e-7) is about 1e-7, which String() writes as "1.00000005e-7"
+    expect(tiny).not.toContain("e");
+    expect(tiny.startsWith("0.0000001")).toBe(true);
+  });
 });
 
 describe("colourSet", () => {

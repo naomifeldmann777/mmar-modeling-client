@@ -1,11 +1,12 @@
 /**
  * Tests for stepper.ts: a run of test model A from the beginning to the end (plan Phase 7:
  * "a run goes through from beginning to end"), a model the validator refuses, and the three
- * statuses. Graphs are built directly, with ids invented for the test.
+ * statuses; then a value the user gives for a continuous draw. Graphs are built directly, with
+ * ids invented for the test.
  */
 import { describe, expect, it } from "vitest";
 import type { ConditionRow, GraphFlow, GraphGenerator, GraphNode, SimulationGraph } from "./graph";
-import { runStatus, startRun, takeStep, type Run } from "./stepper";
+import { describeOpenDraw, drawValues, runStatus, startRun, takeStep, type Run } from "./stepper";
 import type { NodeConcept } from "./vocabulary";
 
 // ---------------------------------------------------------------------------------
@@ -45,7 +46,9 @@ const modelA = graph(
 function pick(run: Run, nodeId: string, value?: string): Run {
   const step = run.steps.find((s) => s.node === nodeId && (value === undefined || s.draws.some((d) => d.value === value))); // what the user clicks
   if (!step) throw new Error(`no possible step for ${nodeId}`);
-  return takeStep(run, step);
+  const result = takeStep(run, step);
+  if (!result.ok) throw new Error(result.message); // a step without an open value is always taken
+  return result.run;
 }
 
 // ---------------------------------------------------------------------------------
@@ -100,5 +103,52 @@ describe("stepper", () => {
     // A state the validator should never let happen; built by hand, so the status is tested on its own.
     const run: Run = { graph: modelA, state: { sourceToken: false, tokens: {}, values: {}, trace: ["start"] }, steps: [] };
     expect(runStatus(run)).toBe("noStep");
+  });
+});
+
+// Start → Check stock (draws amount ~ Uniform [10, 20]) → Decision: amount < 15 → small, otherwise → large.
+const uniformModel = (() => {
+  const below: ConditionRow = { variableName: "amount", operator: "<", value: "15", logicalOperator: null };
+  return graph(
+    [node("start", "Start"), node("check", "Activity"), node("dec", "Decision"), node("small", "End"), node("large", "End")],
+    [flow("f1", "start", "check"), flow("f2", "check", "dec"), flow("f3", "dec", "small", below), flow("f4", "dec", "large", { ...below, operator: ">=" })],
+    [{ ...draw("g", "check", "amount", []), distribution: { type: "Uniform", minimum: 10, maximum: 20 } }],
+  );
+})();
+
+/** The run of the uniform model at Check stock, and its one step, whose value is open. */
+function atCheck() {
+  const started = startRun(uniformModel);
+  if (!started.ok) throw new Error(started.problems.map((p) => p.message).join(" | "));
+  const run = pick(started.run, "start");
+  return { run, step: run.steps[0] };
+}
+
+describe("stepper: a value for a continuous draw (Phase 13)", () => {
+  it("takes the value the user types, with a comma or a dot, and sends the token by it", () => {
+    const { run, step } = atCheck();
+    expect(step.draws[0].value).toBeNull(); // open: the user gives it
+    expect(describeOpenDraw(run, step.draws[0])).toBe("Uniform [10, 20]"); // shown next to the field
+    const result = takeStep(run, step, { g: "12,5" });
+    if (!result.ok) throw new Error(result.message);
+    expect(result.run.state.values).toEqual({ amount: "12.5" }); // kept with a dot, like a drawn value
+    expect(result.run.steps.map((s) => s.produces)).toEqual([["f3"]]); // amount < 15: to small
+  });
+
+  it("refuses a missing value, a text and a value the distribution cannot give, and keeps the run", () => {
+    const { run, step } = atCheck();
+    expect(takeStep(run, step)).toEqual({ ok: false, message: "Enter a value for amount, or let it be drawn." });
+    expect(takeStep(run, step, { g: "abc" })).toEqual({ ok: false, message: '"abc" is not a number. Write it with a dot or a comma, e.g. 12.5.' });
+    expect(takeStep(run, step, { g: "25" })).toEqual({ ok: false, message: "amount cannot be 25: Uniform [10, 20] gives no value above 20." });
+    expect(takeStep(run, step, { g: "9" })).toEqual({ ok: false, message: "amount cannot be 9: Uniform [10, 20] gives no value below 10." });
+    expect(run.state.trace).toEqual(["start"]); // nothing has happened
+  });
+
+  it("draws a value with the Draw button", () => {
+    const { run, step } = atCheck();
+    const values = drawValues(run, step); // { g: "…" }
+    const amount = Number(values.g);
+    expect(amount >= 10 && amount <= 20).toBe(true); // a value Uniform [10, 20] can give
+    expect(takeStep(run, step, values).ok).toBe(true); // and takeStep accepts it
   });
 });

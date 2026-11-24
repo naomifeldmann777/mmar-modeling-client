@@ -15,6 +15,7 @@
  * Source: spec 2.2 (the types and their data), 6.1 (the colour set), 6.2 (drawing).
  */
 import type { Distribution } from "./graph"; // the distributions as the transformer reads them
+import { writeDecimal } from "./numbers"; // a drawn number as text that conditions read back, never "1e-7"
 
 /** A distribution the simulation can draw from: every type but "Unsupported" (check 14). */
 export type Drawable = Exclude<Distribution, { type: "Unsupported" }>;
@@ -28,7 +29,8 @@ export type Drawable = Exclude<Distribution, { type: "Unsupported" }>;
 export type ColourSet = { values: string[] } | { from: number; to: number };
 
 /**
- * Draws one value and returns it as text, as the run keeps every value (VariableValues).
+ * Draws one value and returns it as text, as the run keeps every value (VariableValues). A
+ * number is written with writeDecimal, so a condition can always read it back.
  * `random` gives numbers between 0 and 1: seeded in the path analysis, Math.random for the
  * stepper's "Draw". Examples:
  *   Discrete ja 0.8 / nein 0.2   -> "ja"
@@ -45,12 +47,12 @@ export function sample(distribution: Drawable, random: () => number): string {
       return distribution.entries[distribution.entries.length - 1].value; // only when rounding leaves the point at the very end
     }
     case "Uniform":
-      return String(distribution.minimum! + random() * (distribution.maximum! - distribution.minimum!)); // evenly between Minimum and Maximum
+      return writeDecimal(distribution.minimum! + random() * (distribution.maximum! - distribution.minimum!)); // evenly between Minimum and Maximum
     case "Exponential":
-      return String(-distribution.mean! * Math.log(1 - random())); // 1 - random() is never 0, so the logarithm is finite
+      return writeDecimal(-distribution.mean! * Math.log(1 - random())); // 1 - random() is never 0, so the logarithm is finite
     case "Normal": {
       const radius = Math.sqrt(-2 * Math.log(1 - random())); // Box-Muller: two numbers between 0 and 1 give one normally distributed number
-      return String(distribution.mean! + distribution.standardDeviation! * radius * Math.cos(2 * Math.PI * random())); // shifted to Mean, stretched by StandardDeviation
+      return writeDecimal(distribution.mean! + distribution.standardDeviation! * radius * Math.cos(2 * Math.PI * random())); // shifted to Mean, stretched by StandardDeviation
     }
   }
 }

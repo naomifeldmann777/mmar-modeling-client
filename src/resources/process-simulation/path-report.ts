@@ -18,6 +18,7 @@
  *
  * Source: spec 9 and 9.1 (what the path analysis reports).
  */
+import { describeDistribution, type Drawable } from "./distributions"; // a continuous draw is shown as its distribution
 import type { ConditionRow, SimulationGraph } from "./graph"; // node and flow names, conditions
 import type { PathAnalysisResult, TraceEntry } from "./path-analysis"; // what is written out
 import { WAITING_CONCEPTS, type NodeConcept } from "./vocabulary"; // joins close the branches of a split
@@ -76,12 +77,21 @@ export function pathLines(graph: SimulationGraph, trace: readonly TraceEntry[]):
 /**
  * One executed node as the user reads it. Examples:
  *   Activity "Check stock": lager = ja
+ *   Activity "Take order": amount ~ Normal (μ = 100, σ = 15)
  *   Decision "lager?" → lager == nein
  *   OR-Split "Extras" → kunde == premium, lager == ja
+ *
+ * A continuous draw is written as its distribution, not as its value: a path is a sequence of
+ * nodes, and its runs drew different numbers. The trace kept is the one of its first run, whose
+ * number would read as if it held for the whole path. Which numbers belong to the path is said
+ * by the condition taken at the next Decision or OR-Split, e.g. → amount >= 100.
  */
 export function describeEntry(graph: SimulationGraph, entry: TraceEntry): string {
   const node = graph.nodes[entry.node]; // the executed node
-  const draws = entry.draws.map((draw) => `${draw.variableName} = ${draw.value}`); // the values drawn there
+  const draws = entry.draws.map((draw) => {
+    const distribution = graph.generators[draw.generator]?.distribution; // what the value was drawn from
+    return distribution && distribution.type !== "Discrete" ? `${draw.variableName} ~ ${describeDistribution(distribution as Drawable)}` : `${draw.variableName} = ${draw.value}`; // `as`: a run only draws from a supported type (check 14)
+  }); // the values drawn there
   const taken = DECIDING.includes(node.concept) ? entry.produces.map((flowId) => describeTaken(graph, flowId)) : []; // why the token went where it went
   return `${node.concept} "${node.label}"${draws.length > 0 ? `: ${draws.join(", ")}` : ""}${taken.length > 0 ? ` → ${taken.join(", ")}` : ""}`;
 }

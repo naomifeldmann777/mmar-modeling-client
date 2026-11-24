@@ -70,6 +70,22 @@ describe("processSimulationStore", () => {
     expect(state().run?.steps.map((s) => s.node)).toEqual(["start"]);
   });
 
+  it("keeps the run and says why when a value for a continuous draw is refused", () => {
+    const g = modelA();
+    g.generators.g.distribution = { type: "Uniform", minimum: 10, maximum: 20 }; // lager is now drawn continuously
+    g.flows.f3.condition = [{ variableName: "lager", operator: "<", value: "15", logicalOperator: null }];
+    g.flows.f4.condition = [{ variableName: "lager", operator: ">=", value: "15", logicalOperator: null }];
+    state().open("scene-1", g);
+    state().pick(state().run!.steps[0]); // the Start
+    const open = state().run!.steps[0]; // Check stock, its value open
+    state().pick(open, { g: "25" }); // outside Uniform [10, 20]
+    expect(state().stepMessage).toBe("lager cannot be 25: Uniform [10, 20] gives no value above 20.");
+    expect(state().run?.state.trace).toEqual(["start"]); // nothing happened
+    state().pick(open, { g: "12" });
+    expect(state().stepMessage).toBeNull(); // the message goes with the next step
+    expect(state().run?.state.values).toEqual({ lager: "12" });
+  });
+
   it("opens with a message when no graph could be built", () => {
     state().openWithMessage("scene-1", "The process simulation has no mapping for this metamodel.");
     expect(state().active).toBe(true);

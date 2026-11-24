@@ -165,3 +165,50 @@ describe("analysePaths: runs that do not finish", () => {
     expect(result.allRuns[0].executionTime).toBeGreaterThan(0); // the work done is still counted
   });
 });
+
+// ---------------------------------------------------------------------------------
+// Continuous distributions (Phase 13)
+// ---------------------------------------------------------------------------------
+
+/** Start → check (draws amount from `distribution`, and lager when `withLager`) → dec: amount < `limit` → small, otherwise → large. */
+function amountModel(distribution: GraphGenerator["distribution"], limit: string, withLager = false) {
+  const below: ConditionRow = { variableName: "amount", operator: "<", value: limit, logicalOperator: null };
+  const notBelow: ConditionRow = { ...below, operator: ">=" };
+  const generators = [{ ...draw("g", "check", "amount", []), distribution }, ...(withLager ? [draw("g2", "check", "lager", [["ja", 0.8], ["nein", 0.2]])] : [])];
+  return graph(
+    [node("start", "Start"), node("check", "Activity", 5), node("dec", "Decision"), node("small", "End"), node("large", "End")],
+    [flow("f1", "start", "check"), flow("f2", "check", "dec"), flow("f3", "dec", "small", below), flow("f4", "dec", "large", notBelow)],
+    generators,
+  );
+}
+const shareOf = (result: ReturnType<typeof analysed>, end: string) => result.paths.find((path) => path.nodes.at(-1) === end)!.probability; // the share of the path that ends there
+
+describe("analysePaths: continuous distributions", () => {
+  it("draws every continuous value and sends the token by it: Normal 50 %, Uniform 50 %, Exponential 36.8 % above the limit", () => {
+    expect(shareOf(analysed(amountModel({ type: "Normal", mean: 100, standardDeviation: 15 }, "100"), 10000), "large")).toBeCloseTo(0.5, 1); // half of a normal distribution lies above its mean
+    expect(shareOf(analysed(amountModel({ type: "Uniform", minimum: 10, maximum: 20 }, "15"), 10000), "large")).toBeCloseTo(0.5, 1); // the upper half of the interval
+    expect(shareOf(analysed(amountModel({ type: "Exponential", mean: 30 }, "30"), 10000), "large")).toBeCloseTo(Math.exp(-1), 1); // P(X ≥ mean) = e^-1 = 0.368
+  });
+
+  it("forms paths from the nodes only, not from the drawn numbers", () => {
+    const result = analysed(amountModel({ type: "Normal", mean: 100, standardDeviation: 15 }, "100"), 1000);
+    expect(result.paths).toHaveLength(2); // not one per drawn number
+    expect(result.noStep + result.aborted).toBe(0); // every drawn value leads somewhere
+    const drawn = result.allRuns.map((run) => run.trace[1].draws[0].value!); // what Check stock drew in each run
+    expect(new Set(drawn).size).toBe(1000); // a new number in every run
+    expect(drawn.every((value) => !value.includes("e"))).toBe(true); // written so that conditions read it (writeDecimal)
+  });
+
+  it("draws a discrete and a continuous value at the same node", () => {
+    const result = analysed(amountModel({ type: "Uniform", minimum: 10, maximum: 20 }, "15", true), 2000);
+    const draws = result.allRuns[0].trace[1].draws; // both values of the first run
+    expect(draws.map((d) => d.variableName)).toEqual(["amount", "lager"]);
+    expect(draws.every((d) => d.value !== null)).toBe(true); // nothing stays open in a run
+    expect(result.allRuns.filter((run) => run.trace[1].draws[1].value === "ja").length / 2000).toBeCloseTo(0.8, 1); // the discrete probabilities still hold
+  });
+
+  it("repeats exactly with the same seed", () => {
+    const g = amountModel({ type: "Normal", mean: 100, standardDeviation: 15 }, "100");
+    expect(analysed(g, 200, 7).allRuns).toEqual(analysed(g, 200, 7).allRuns);
+  });
+});

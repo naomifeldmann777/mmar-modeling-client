@@ -343,7 +343,7 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
 - Limitations written up for the thesis: conflicts in Petri nets without data (preferred
   fix: give the Petri net metamodel a variable, a random generator and a condition table on
   arcs); only discrete distributions (preferred future extension: a data concept
-  `DistributionType`).
+  `DistributionType`; done in Phase 13).
 
 ### Phase 6: firing rule (`firing.ts`, `pairs.ts`, `numbers.ts`)
 
@@ -488,6 +488,52 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
   the highlighted path goes and paths cannot be selected until the next analysis. A tab change
   closes the panel.
 - `ringAround` was taken out of `stepper-highlight.ts` so both highlightings draw the same band.
+
+### Phase 13: continuous distributions (Normal, Uniform, Exponential)
+
+- Data concepts `DistributionType`, `Mean`, `StandardDeviation`, `Minimum`, `Maximum`; the
+  table of values and probabilities is now `DiscreteDistribution` (spec 2.2). The transformer
+  reads the type as one of Discrete, Normal, Uniform, Exponential, anything else as
+  `Unsupported` (check 14).
+- `distributions.ts`: `sample` (draws a value; Box-Muller for Normal, inversion for
+  Exponential), `colourSet` (the values a variable can take, spec 6.1: Uniform [min, max],
+  Exponential [0, ∞), Normal unbounded, not truncated), `describeDistribution` (the text the
+  user reads, e.g. `Normal (μ = 100, σ = 15)`).
+- Firing rule (`firing.ts`): a discrete draw is one step per value, as before; a continuous one
+  is a single step with its value open (`Draw.value` null, `produces` []). `fixValues` gives the
+  value and works out where the tokens go; `executeStep` refuses a step that is still open.
+- Who gives the value: the path analysis draws it with `sample` from the seeded generator; in
+  the stepper the user types it (comma or dot) or presses "Draw" (`Math.random`, `drawValues`).
+  `takeStep(run, step, values?)` checks a typed value against the colour set and returns
+  `{ ok: false, message }` when it is missing, no number or outside, so the run stays as it was.
+- The path analysis draws every value with `sample`, discrete or continuous, so drawing a
+  value works the same everywhere (the weights of the steps are gone). Then it takes the step
+  with the drawn discrete values and gives it the continuous ones with `fixValues`. A drawn
+  value that led nowhere would make the run "noStep", counted and not redistributed; checks
+  20 to 22 rule it out. Results for a given seed differ from those before Phase 13.
+- Paths stay sequences of nodes: runs that drew different numbers but executed the same nodes
+  are one path. The path details therefore write a continuous draw as its distribution
+  (`amount ~ Normal (μ = 100, σ = 15)`), and the condition taken says which numbers belong to
+  the path (`→ amount >= 100`).
+- Validator:
+  - check 12 also checks the parameters: numbers; StandardDeviation and the Mean of an
+    Exponential > 0; Minimum < Maximum;
+  - check 14 accepts the four types;
+  - check 18 refuses `==` / `!=` on a variable drawn from a continuous distribution anywhere,
+    also when it is drawn discretely at another node (mixing is allowed);
+  - checks 20 to 22 try test values instead of every number: the numbers written in the
+    conditions at the node, the midpoints between neighbours, one below and one above, and the
+    ends of the intervals, kept only where the distribution can give them. Exact, since a
+    condition only compares a variable with a fixed number. Like before, a combination may be
+    reported that never occurs (e.g. exactly 0 of an Exponential), never one missed.
+- Numbers (`numbers.ts`): `writeDecimal` writes a drawn or typed number so that `parseDecimal`
+  reads it back (never `1e-7`, which `String()` gives); `displayValue` shows a number with more
+  than two decimals rounded to two (variable table, value labels in the model). The run keeps
+  every digit.
+- `MAX_RUNS` raised from 10000 to 100000: a path of 0.015 % (the fraud-detection model: high
+  risk, wrong response, card blocked, IP listed) is found in 1000 runs about once in seven
+  analyses, in 100000 runs almost always. Measured on that model (23 nodes): 100000 runs take
+  about 11 s, during which the client takes no click, and the result keeps about 260 MB.
 
 ## Findings of Phase 0 for later phases
 

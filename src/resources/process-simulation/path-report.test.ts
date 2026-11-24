@@ -80,6 +80,17 @@ describe("pathLines", () => {
     );
     expect(pathLines(g, analysed(g, 1).paths[0].trace)[2].text).toBe('Decision "dec" → l == ja AND k == p');
   });
+
+  it("writes a continuous draw as its distribution, not as the number of the path's first run", () => {
+    const below: ConditionRow = { variableName: "amount", operator: "<", value: "100", logicalOperator: null };
+    const g = graph(
+      [node("start", "Start"), node("take", "Activity"), node("dec", "Decision"), node("small", "End"), node("large", "End")],
+      [flow("f0", "start", "take"), flow("f1", "take", "dec"), flow("f2", "dec", "small", below), flow("f3", "dec", "large", { ...below, operator: ">=" })],
+      [{ ...draw("g", "take", "amount", []), distribution: { type: "Normal", mean: 100, standardDeviation: 15 } }],
+    );
+    const lines = pathLines(g, analysed(g, 20).paths.find((p) => p.nodes.includes("large"))!.trace).map((line) => line.text);
+    expect(lines.slice(1, 3)).toEqual(['Activity "take": amount ~ Normal (μ = 100, σ = 15)', 'Decision "dec" → amount >= 100']); // the condition says which numbers belong to this path
+  });
 });
 
 describe("pathAnalysisCsv", () => {

@@ -7,9 +7,12 @@
  *   possible, or why the run cannot start (the validator's problems, spec 8 step 1);
  * - the possible steps as buttons, one per step (Phase 7: the user confirms even a single
  *   step). Where a value is drawn, the button names it with its probability, which is shown
- *   for information only (spec 8); at a Decision or OR-Split it names where the token goes;
- * - the values of the variables, the flows that carry a token, and the trace of executed
- *   nodes;
+ *   for information only (spec 8); at a Decision or OR-Split it names where the token goes.
+ *   A step that draws from a continuous distribution names the distribution and has a field
+ *   per open value and a "Draw" button: its own button takes the typed value, "Draw" lets the
+ *   value be drawn (Phase 13). A refused value is explained below the steps;
+ * - the values of the variables (a number with more than two decimals rounded to two), the
+ *   flows that carry a token, and the trace of executed nodes;
  * - "Restart" (from the beginning) and "Stop simulation" (closes the panel, unlocks the model).
  *
  * Who it talks to: it reads processSimulationStore; a step button calls `pick`, "Restart"
@@ -20,11 +23,12 @@
  * RightNav shows it instead of the attribute window while the stepper is open; it is started
  * from the menu "Process Simulation → Stepper".
  */
-import { useEffect, type ReactNode } from "react"; // to keep the 3D highlighting in step with the run
-import { Alert, Box, Button, Stack, Table, TableBody, TableCell, TableRow, Typography } from "@mui/material";
+import { useEffect, useState, type ReactNode } from "react"; // to keep the 3D highlighting in step with the run; the typed values of an open step
+import { Alert, Box, Button, Stack, Table, TableBody, TableCell, TableRow, TextField, Typography } from "@mui/material";
 import type { Step } from "@/resources/process-simulation/firing";
 import type { SimulationGraph } from "@/resources/process-simulation/graph";
-import { runStatus } from "@/resources/process-simulation/stepper";
+import { displayValue } from "@/resources/process-simulation/numbers"; // values shown with at most two decimals
+import { describeOpenDraw, drawValues, runStatus, type Run } from "@/resources/process-simulation/stepper";
 import { useProcessSimulationStore } from "@/resources/store/processSimulationStore";
 import { clearHighlights, showHighlights } from "./stepper-highlight"; // boxes, colours and labels in the 3D model
 import { stopStepper } from "./stepper-session"; // closes the store and unlocks the model
@@ -34,6 +38,7 @@ export default function StepperPanel() {
   const problems = useProcessSimulationStore((s) => s.problems); // why the run could not start
   const message = useProcessSimulationStore((s) => s.message); // a problem before the validator
   const pick = useProcessSimulationStore((s) => s.pick); // carries out a step
+  const stepMessage = useProcessSimulationStore((s) => s.stepMessage); // why a typed value was refused
   const restart = useProcessSimulationStore((s) => s.restart); // back to the beginning
 
   // The 3D model shows the same state as the panel: redrawn after every step, removed when
@@ -73,11 +78,16 @@ export default function StepperPanel() {
       {/* The possible steps, one button each */}
       {run && run.steps.length > 0 && (
         <Stack spacing={0.5}>
-          {run.steps.map((step, index) => (
-            <Button key={index} variant="outlined" size="small" onClick={() => pick(step)} sx={{ justifyContent: "flex-start", textTransform: "none", textAlign: "left" }}>
-              {describeStep(run.graph, step)}
-            </Button>
-          ))}
+          {run.steps.map((step, index) =>
+            step.draws.some((draw) => draw.value === null) ? (
+              <OpenStep key={`${run.state.trace.length}-${index}`} run={run} step={step} /> // keyed by the state as well, so the fields are empty again after every step
+            ) : (
+              <Button key={index} variant="outlined" size="small" onClick={() => pick(step)} sx={STEP_BUTTON}>
+                {describeStep(run, step)}
+              </Button>
+            ),
+          )}
+          {stepMessage && <Alert severity="warning">{stepMessage}</Alert>}
         </Stack>
       )}
 
@@ -93,7 +103,7 @@ export default function StepperPanel() {
                   {variables.map(([name, value]) => (
                     <TableRow key={name}>
                       <TableCell sx={{ pl: 0 }}>{name}</TableCell>
-                      <TableCell>{value ?? "not drawn yet"}</TableCell>
+                      <TableCell>{value === undefined ? "not drawn yet" : displayValue(value)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -143,6 +153,42 @@ export default function StepperPanel() {
   );
 }
 
+const STEP_BUTTON = { justifyContent: "flex-start", textTransform: "none", textAlign: "left" } as const; // a step reads like a sentence, left-aligned
+
+/**
+ * A step with an open value: its button takes the values typed into its fields, "Draw" lets
+ * them be drawn. Example, Check stock drawing amount ~ Uniform [10, 20]:
+ *   [ Activity "Check stock": amount ~ Uniform [10, 20] ]
+ *   amount [ 12,5 ]  [ Draw ]
+ */
+function OpenStep({ run, step }: { run: Run; step: Step }) {
+  const pick = useProcessSimulationStore((s) => s.pick); // takeStep checks the values, the store keeps its message
+  const [values, setValues] = useState<Record<string, string>>({}); // generator uuid -> the text typed so far
+  const open = step.draws.filter((draw) => draw.value === null); // one field each
+  return (
+    <Stack spacing={0.5} sx={{ border: 1, borderColor: "divider", borderRadius: 1, p: 1 }}>
+      <Button variant="outlined" size="small" onClick={() => pick(step, values)} sx={STEP_BUTTON}>
+        {describeStep(run, step)}
+      </Button>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+        {open.map((draw) => (
+          <TextField
+            key={draw.generator}
+            size="small"
+            label={draw.variableName} // which variable the value is for
+            value={values[draw.generator] ?? ""}
+            onChange={(event) => setValues({ ...values, [draw.generator]: event.target.value })}
+            slotProps={{ htmlInput: { inputMode: "decimal" } }} // a number pad on touch devices; a comma or a dot are both read
+          />
+        ))}
+        <Button size="small" onClick={() => pick(step, drawValues(run, step))}>
+          Draw
+        </Button>
+      </Stack>
+    </Stack>
+  );
+}
+
 /** A titled part of the panel. */
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -156,13 +202,16 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 /**
  * The text of a step button. Examples:
  *   Activity "Check stock": lager = ja (80 %)
+ *   Activity "Check stock": amount ~ Uniform [10, 20]     (the value is still open)
  *   Decision "In stock?" → Ship
  *   OR-Split "Extras" → Gift wrap, Card
  */
-function describeStep(graph: SimulationGraph, step: Step): string {
+function describeStep(run: Run, step: Step): string {
+  const graph = run.graph; // names of nodes and flows
   const node = graph.nodes[step.node]; // the node the step runs
-  const draws = step.draws.map((draw) => `${draw.variableName} = ${draw.value}${draw.probability === null ? "" : ` (${Math.round(draw.probability * 1000) / 10} %)`}`); // the probability is information only (spec 8)
-  const where = node.concept === "Decision" || node.concept === "OR-Split" ? ` → ${step.produces.map((flowId) => graph.nodes[graph.flows[flowId].target ?? ""]?.label ?? "?").join(", ")}` : ""; // where the token goes follows from the values
+  const draws = step.draws.map((draw) => (draw.value === null ? `${draw.variableName} ~ ${describeOpenDraw(run, draw)}` : `${draw.variableName} = ${draw.value}${draw.probability === null ? "" : ` (${Math.round(draw.probability * 1000) / 10} %)`}`)); // an open value names its distribution; the probability is information only (spec 8)
+  const deciding = (node.concept === "Decision" || node.concept === "OR-Split") && step.produces.length > 0; // with an open value, where the token goes is not known yet
+  const where = deciding ? ` → ${step.produces.map((flowId) => graph.nodes[graph.flows[flowId].target ?? ""]?.label ?? "?").join(", ")}` : ""; // where the token goes follows from the values
   return `${describeNode(graph, step.node)}${draws.length > 0 ? `: ${draws.join(", ")}` : ""}${where}`;
 }
 
