@@ -2,7 +2,8 @@
 //
 // P8 component tests for the reference-attribute dialog: it loads its context off the
 // `openReferenceDialog` bus channel, offers only the instances the attribute type's
-// Role allows, and sets / unsets the reference role instance.
+// Role allows, and sets / unsets the reference role instance. Then the model filter: only the
+// open model's elements at first, others when ticked, each entry named with its model.
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { AttributeInstance, ClassInstance, RoleInstance } from "@gds";
@@ -25,6 +26,8 @@ const mocks = vi.hoisted(() => ({
     getAllRelationClassInstances: vi.fn(async (): Promise<any[]> => []),
     getAllPortInstances: vi.fn(async (): Promise<any[]> => []),
     getAllSceneInstancesFromLocal: vi.fn(async (): Promise<any[]> => []),
+    getTabContextSceneInstance: vi.fn(async (): Promise<any> => undefined),
+    portInstancesOf: vi.fn((scene: any): any[] => scene.port_instances ?? []), // a model's ports, as the real one collects them
   },
   metaUtility: {
     getMetaClass: vi.fn(async (): Promise<any> => undefined),
@@ -56,6 +59,7 @@ vi.mock("@/engine", () => ({
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
 vi.mock("@/resources/services/meta-utility", () => ({ metaUtility: mocks.metaUtility }));
 vi.mock("@/resources/services/expression-utility", () => ({ expressionUtility: mocks.expressionUtility }));
+vi.mock("@/resources/services/scene-tree-service", () => ({ loadAllSceneInstances: vi.fn(async () => undefined) })); // the models are given by the instanceUtility mock; the real one would fetch every scene type's models from the server
 
 import ReferenceAttributeDialog from "./ReferenceAttributeDialog";
 import { eventBus } from "@/resources/services/event-bus";
@@ -112,6 +116,19 @@ function allowedClassInstance(): ClassInstance {
   }) as ClassInstance;
 }
 
+/** A model (scene instance) holding `classInstances`. */
+function model(uuid: string, name: string, classInstances: ClassInstance[] = [], sceneType = "st-bpmn") {
+  return { uuid, name, uuid_scene_type: sceneType, class_instances: classInstances, relationclasses_instances: [], port_instances: [] };
+}
+
+/** The open model holds `classInstances`; no other model is loaded. */
+function openModelHolds(...classInstances: ClassInstance[]) {
+  mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(model("scene-open", "Bestellabwicklung", classInstances));
+}
+
+/** The picker of class instances, by its label (the model filter is a combobox too). */
+const classPicker = () => screen.getByRole("combobox", { name: /Select Referenced ClassInstance/ });
+
 function openDialogWith(attributeInstance: AttributeInstance) {
   useUiStore.setState({
     dialogs: { ...useUiStore.getState().dialogs, referenceAttribute: true },
@@ -135,6 +152,8 @@ beforeEach(() => {
   mocks.instanceUtility.getAllRelationClassInstances.mockResolvedValue([]);
   mocks.instanceUtility.getAllPortInstances.mockResolvedValue([]);
   mocks.instanceUtility.getAllSceneInstancesFromLocal.mockResolvedValue([]);
+  mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(model("scene-open", "Bestellabwicklung"));
+  mocks.globalObject.sceneTypes = [{ uuid: "st-bpmn", name: "BPMN 2.0" }, { uuid: "st-petri", name: "Petri Net" }];
   mocks.expressionUtility.attrvalByInst.mockResolvedValue("Referenced Task");
   useLogStore.setState({ snackbar: { open: false, message: "", severity: "info" } });
   useUiStore.setState({
@@ -154,15 +173,15 @@ describe("ReferenceAttributeDialog", () => {
       name: "Other",
       attribute_instance: [],
     }) as ClassInstance;
-    mocks.instanceUtility.getAllClassInstances.mockResolvedValue([target, notAllowed]);
+    openModelHolds(target, notAllowed);
 
     render(<ReferenceAttributeDialog />);
     openDialogWith(referenceAttributeInstance());
 
     await waitFor(() => expect(screen.getByText("Select Referenced ClassInstance")).toBeTruthy());
-    fireEvent.mouseDown(screen.getByRole("combobox"));
+    fireEvent.mouseDown(classPicker());
 
-    expect(await screen.findByRole("option", { name: /Referenced Task \| ci-target/ })).toBeTruthy();
+    expect(await screen.findByRole("option", { name: /Referenced Task \| Bestellabwicklung \| ci-target/ })).toBeTruthy();
     expect(screen.queryByRole("option", { name: /ci-other/ })).toBeNull();
   });
 
@@ -172,19 +191,19 @@ describe("ReferenceAttributeDialog", () => {
     // from the scene type instead.
     mocks.globalObject.current_class_instance = undefined;
     mocks.metaUtility.getMetaAttribute.mockResolvedValue(metaClassWithReferenceAttribute().attributes[0]);
-    mocks.instanceUtility.getAllClassInstances.mockResolvedValue([allowedClassInstance()]);
+    openModelHolds(allowedClassInstance());
 
     render(<ReferenceAttributeDialog />);
     openDialogWith(referenceAttributeInstance());
 
     await waitFor(() => expect(screen.getByText("Select Referenced ClassInstance")).toBeTruthy());
-    fireEvent.mouseDown(screen.getByRole("combobox"));
-    expect(await screen.findByRole("option", { name: /Referenced Task \| ci-target/ })).toBeTruthy();
+    fireEvent.mouseDown(classPicker());
+    expect(await screen.findByRole("option", { name: /Referenced Task \| Bestellabwicklung \| ci-target/ })).toBeTruthy();
   });
 
   it("sets the reference: creates a role instance pointing at the picked class instance", async () => {
     const target = allowedClassInstance();
-    mocks.instanceUtility.getAllClassInstances.mockResolvedValue([target]);
+    openModelHolds(target);
     mocks.instanceUtility.getClassInstance.mockResolvedValue(target);
     mocks.instanceCreationHandler.createRoleInstance.mockImplementation(
       async (uuid: string) => RoleInstance.fromJS({ uuid, uuid_role: ROLE_UUID, name: "name_placeholder" }) as RoleInstance,
@@ -195,7 +214,7 @@ describe("ReferenceAttributeDialog", () => {
     openDialogWith(attributeInstance);
 
     await waitFor(() => expect(screen.getByText("Select Referenced ClassInstance")).toBeTruthy());
-    fireEvent.mouseDown(screen.getByRole("combobox"));
+    fireEvent.mouseDown(classPicker());
     fireEvent.click(await screen.findByRole("option", { name: /Referenced Task/ }));
     fireEvent.click(screen.getByRole("button", { name: "add" }));
 
@@ -232,7 +251,7 @@ describe("ReferenceAttributeDialog", () => {
       name: "Sub-Process",
       attribute_instance: [{ uuid: "ai-title", uuid_attribute: "some-other-name", value: "Titled", table_attributes: [] }],
     }) as ClassInstance;
-    mocks.instanceUtility.getAllClassInstances.mockResolvedValue([unnamed]);
+    openModelHolds(unnamed);
     mocks.instanceUtility.getClassInstance.mockResolvedValue(unnamed);
     mocks.expressionUtility.attrvalByInst.mockResolvedValue(undefined);
     mocks.instanceCreationHandler.createRoleInstance.mockImplementation(
@@ -252,7 +271,7 @@ describe("ReferenceAttributeDialog", () => {
     });
     useLogStore.setState({ snackbar: { open: false, message: "", severity: "info" } });
 
-    fireEvent.mouseDown(screen.getByRole("combobox"));
+    fireEvent.mouseDown(classPicker());
     fireEvent.click(await screen.findByRole("option", { name: /ci-target/ }));
     fireEvent.click(screen.getByRole("button", { name: "add" }));
 
@@ -300,7 +319,7 @@ describe("ReferenceAttributeDialog", () => {
     /** Renders the dialog on a fresh attribute and waits for the picker. */
     async function pickTarget() {
       const target = allowedClassInstance();
-      mocks.instanceUtility.getAllClassInstances.mockResolvedValue([target]);
+      openModelHolds(target);
       mocks.instanceUtility.getClassInstance.mockResolvedValue(target);
       mocks.instanceCreationHandler.createRoleInstance.mockImplementation(
         async (uuid: string) => RoleInstance.fromJS({ uuid, uuid_role: ROLE_UUID, name: "name_placeholder" }) as RoleInstance,
@@ -309,7 +328,7 @@ describe("ReferenceAttributeDialog", () => {
       render(<ReferenceAttributeDialog />);
       openDialogWith(attributeInstance);
       await waitFor(() => expect(screen.getByText("Select Referenced ClassInstance")).toBeTruthy());
-      fireEvent.mouseDown(screen.getByRole("combobox"));
+      fireEvent.mouseDown(classPicker());
       fireEvent.click(await screen.findByRole("option", { name: /Referenced Task/ }));
       return attributeInstance;
     }
@@ -354,7 +373,7 @@ describe("ReferenceAttributeDialog", () => {
     // The column's attribute is on no class or scene type, so the usual lookups find nothing.
     mocks.metaUtility.getMetaClass.mockResolvedValue({ attributes: [] });
     mocks.metaUtility.getMetaAttribute.mockResolvedValue(undefined);
-    mocks.instanceUtility.getAllClassInstances.mockResolvedValue([allowedClassInstance()]);
+    openModelHolds(allowedClassInstance());
     const cell = referenceAttributeInstance();
 
     render(<ReferenceAttributeDialog />);
@@ -365,5 +384,69 @@ describe("ReferenceAttributeDialog", () => {
     useUiStore.setState({ dialogs: { ...useUiStore.getState().dialogs, referenceAttribute: true } });
 
     await waitFor(() => expect(screen.getByText("Select Referenced ClassInstance")).toBeTruthy());
+  });
+
+  describe("choosing the models whose elements are offered", () => {
+    /** A variable named `name` in some model. */
+    const variable = (uuid: string, name: string) =>
+      ClassInstance.fromJS({ uuid, uuid_class: ALLOWED_CLASS_UUID, name: "Variable", attribute_instance: [{ uuid: `${uuid}-name`, uuid_attribute: NAME_ATTRIBUTE_UUID, value: name, table_attributes: [] }] }) as ClassInstance;
+
+    /** Opens the dialog on the open model "Bestellabwicklung" (lager), with Testmodell 1 (lager), Testmodell 2 (kunde) and the Petri net Netz A (menge) loaded. */
+    async function openWithThreeModels() {
+      openModelHolds(variable("v-open", "lager"));
+      mocks.instanceUtility.getAllSceneInstancesFromLocal.mockResolvedValue([
+        model("scene-open", "Bestellabwicklung (saved copy)", []), // the scene tree's copy of the open model, without its newest variable
+        model("scene-1", "Testmodell 1", [variable("v-1", "lager")]),
+        model("scene-2", "Testmodell 2", [variable("v-2", "kunde")]),
+        model("scene-3", "Grundriss", []), // nothing the Role allows: not listed
+        model("scene-4", "Netz A", [variable("v-4", "menge")], "st-petri"), // another scene type
+      ]);
+      render(<ReferenceAttributeDialog />);
+      openDialogWith(referenceAttributeInstance());
+      await waitFor(() => expect(screen.getByText("Select Referenced ClassInstance")).toBeTruthy());
+    }
+    const optionNames = () => screen.getAllByRole("option").map((option) => option.textContent);
+
+    it("offers only the elements of the open model at first, from its live copy, each named with its model", async () => {
+      await openWithThreeModels();
+      fireEvent.mouseDown(classPicker());
+      expect(optionNames()).toEqual(["lager | Bestellabwicklung | v-open"]); // not the tree's stale copy, not the other models
+    });
+
+    /** The rows of "Show elements from" as they read: types with their count, then the listed models. */
+    const filterRows = () => screen.getAllByRole("checkbox").map((box) => box.closest("label")?.textContent);
+
+    it("lists the models that hold an element the Role allows under their scene types, only the current type unfolded", async () => {
+      await openWithThreeModels();
+      expect(filterRows()).toEqual(["BPMN 2.0 (3)", "Bestellabwicklung – current model", "Testmodell 1", "Testmodell 2", "Petri Net (1)"]); // Petri Net folded; Grundriss holds nothing to reference
+      fireEvent.click(screen.getByRole("button", { name: "Fold BPMN 2.0" }));
+      fireEvent.click(screen.getByRole("button", { name: "Unfold Petri Net" }));
+      await waitFor(() => expect(filterRows()).toEqual(["BPMN 2.0 (3)", "Petri Net (1)", "Netz A"])); // straight to the Petri nets, nothing to scroll past; folding is animated, so the BPMN models leave after it
+    });
+
+    it("adds the elements of a ticked model", async () => {
+      await openWithThreeModels();
+      fireEvent.click(screen.getByRole("checkbox", { name: "Testmodell 1" }));
+      fireEvent.mouseDown(classPicker());
+      expect(optionNames()).toEqual(["lager | Bestellabwicklung | v-open", "lager | Testmodell 1 | v-1"]); // two variables called lager, told apart by their model
+    });
+
+    it("ticks all models of a scene type with the type's box, and unticks them with a second click", async () => {
+      await openWithThreeModels();
+      fireEvent.click(screen.getByRole("checkbox", { name: "BPMN 2.0 (3)" })); // the current model was ticked, the other two follow
+      fireEvent.mouseDown(classPicker());
+      expect(optionNames()).toEqual(["lager | Bestellabwicklung | v-open", "lager | Testmodell 1 | v-1", "kunde | Testmodell 2 | v-2"]); // not Netz A: another type
+      fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "BPMN 2.0 (3)" })); // all were ticked: all are unticked
+      expect(screen.getByText("No element of the chosen models can be referenced here. Choose more models above.")).toBeTruthy();
+    });
+
+    it("says so when no ticked model holds an element to reference", async () => {
+      await openWithThreeModels();
+      fireEvent.click(screen.getByRole("checkbox", { name: "Bestellabwicklung – current model" })); // untick the only ticked one
+      expect(screen.getByText("No element of the chosen models can be referenced here. Choose more models above.")).toBeTruthy();
+      expect(screen.queryByText("Select Referenced ClassInstance")).toBeNull();
+    });
   });
 });

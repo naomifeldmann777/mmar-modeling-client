@@ -202,9 +202,9 @@ export class InstanceUtility {
 
   /**
    * Every port instance of a scene: the scene's own, plus those of its class and
-   * relation class instances.
+   * relation class instances. Public for the reference dialog, which offers ports model by model.
    */
-  private portInstancesOf(sceneInstance: SceneInstance): PortInstance[] {
+  portInstancesOf(sceneInstance: SceneInstance): PortInstance[] {
     return [
       ...sceneInstance.port_instances,
       ...sceneInstance.class_instances.flatMap((classInstance) => classInstance.port_instance),

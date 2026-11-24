@@ -1,18 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight"; // a folded scene type in "Show elements from"
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore"; // an unfolded one
 import { v4 as uuidv4 } from "uuid";
 import {
   Box,
   Button,
+  Checkbox,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   FormControl,
+  FormControlLabel,
+  IconButton,
   InputLabel,
   MenuItem,
   Select,
   Stack,
   TextField,
+  Typography,
 } from "@mui/material";
 import type {
   Attribute,
@@ -50,6 +57,17 @@ import { NAME_ATTRIBUTE_UUID } from "@/constants";
  * Choosing a target creates the role instance that records the reference and writes its
  * name into the attribute's value, then runs the hybrid algorithms — which is what makes
  * a Statechange Reference adopt the mesh of what it now points at.
+ *
+ * Which models the class, relation class and port pickers draw from: "Show elements from"
+ * lists every loaded model that holds an element the Role allows, grouped under its scene
+ * type, and the user ticks the ones to show: single models, or all models of a type with the
+ * type's box. It is a list in the dialog, not a popup, so there is nothing to close; each type
+ * folds in or out with its arrow. Only the model open in the current tab is ticked when the
+ * dialog opens, and only its type unfolded, so a condition's variable is picked from its own
+ * model unless the user asks for another one.
+ * Each entry names its model ("lager | Bestellabwicklung | <uuid>"), so two variables called
+ * "lager" in two models can be told apart. The scene instance picker (a reference to a whole
+ * model) is not filtered: there the other models are the point.
  */
 interface AllowedScene {
   sceneInstance: SceneInstance;
@@ -58,15 +76,32 @@ interface AllowedScene {
 interface AllowedClass {
   classInstance: ClassInstance;
   parentRole: Role;
+  scene: SceneInstance; // the model it belongs to, for the filter and its label
 }
 interface AllowedRelationclass {
   relationclassInstance: RelationclassInstance;
   parentRole: Role;
+  scene: SceneInstance; // likewise
 }
 interface AllowedPort {
   portInstance: PortInstance;
   parentRole: Role;
+  scene: SceneInstance; // likewise
 }
+
+/** A model the user can show the elements of, e.g. "Bestellabwicklung – current model". */
+interface ModelOption {
+  uuid: string; // the scene instance's uuid
+  label: string; // its name, marked when it is the current model
+}
+
+/** The models of one scene type, listed under the type's name. */
+interface ModelGroup {
+  uuid: string; // the scene type's uuid
+  name: string; // e.g. "BPMN 2.0"
+  models: ModelOption[]; // in the order of the loaded models, the current one first
+}
+
 
 /** Same shape as the bus channel's payload (uiStore carries it too, for reopening). */
 type Payload = OpenReferenceDialogPayload;
@@ -94,6 +129,10 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
   const [selectedRelationclassUuid, setSelectedRelationclassUuid] = useState("");
   const [selectedPortUuid, setSelectedPortUuid] = useState("");
 
+  const [modelGroups, setModelGroups] = useState<ModelGroup[]>([]); // the models with an element the Role allows, by scene type, the current one's type first
+  const [shownModels, setShownModels] = useState<string[]>([]); // uuids of the ticked models: their elements are offered
+  const [unfoldedTypes, setUnfoldedTypes] = useState<string[]>([]); // uuids of the scene types whose models are listed
+
   //reset all variables for new load
   const reset = useCallback(() => {
     setAttributeInstance(null);
@@ -106,6 +145,9 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
     setSelectedClassUuid("");
     setSelectedRelationclassUuid("");
     setSelectedPortUuid("");
+    setModelGroups([]);
+    setShownModels([]);
+    setUnfoldedTypes([]);
   }, []);
 
   const load = useCallback(
@@ -131,10 +173,20 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
       setReferenceRoleInstance(roleInstance);
 
       if (role) {
-        setAllowedSceneInstances(await collectAllowedSceneInstances(role));
-        setAllowedClassInstances(await collectAllowedClassInstances(role));
-        setAllowedRelationclassInstances(await collectAllowedRelationclassInstances(role));
-        setAllowedPortInstances(await collectAllowedPortInstances(role));
+        const { models, current } = await loadedModels(); // every loaded model, the open one in its live copy
+        const classes = collectAllowedClassInstances(role, models); // each with the model it belongs to
+        const relationclasses = collectAllowedRelationclassInstances(role, models);
+        const ports = collectAllowedPortInstances(role, models);
+        setAllowedSceneInstances(await collectAllowedSceneInstances(role)); // not filtered by model (see the top of the file)
+        setAllowedClassInstances(classes);
+        setAllowedRelationclassInstances(relationclasses);
+        setAllowedPortInstances(ports);
+        const holding = new Set([...classes, ...relationclasses, ...ports].map((entry) => entry.scene.uuid)); // models with something to offer
+        const offered = models.filter((scene) => scene === current || holding.has(scene.uuid)); // the current model is always listed, even when it holds nothing
+        const groups = groupByType(offered, current); // the current model's type first
+        setModelGroups(groups);
+        setUnfoldedTypes(current ? [current.uuid_scene_type] : groups.map((group) => group.uuid)); // the other types folded, so they are reached without scrolling; without an open model, all unfolded
+        setShownModels(current ? [current.uuid] : offered.map((scene) => scene.uuid)); // only the current model at first; without an open model, all
       }
       setIsLoading(false);
     },
@@ -239,6 +291,38 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
 
   const showGroup = (length: number) => !isLoading && length > 0 && !referenceRoleInstance;
 
+  // The pickers offer only the elements of the ticked models.
+  const isShown = (entry: { scene: SceneInstance }) => shownModels.includes(entry.scene.uuid); // ticked in "Show elements from"
+  const shownClasses = allowedClassInstances.filter(isShown);
+  const shownRelationclasses = allowedRelationclassInstances.filter(isShown);
+  const shownPorts = allowedPortInstances.filter(isShown);
+  const elementCount = allowedClassInstances.length + allowedRelationclassInstances.length + allowedPortInstances.length; // before the filter: is there anything to filter?
+
+  /** Shows the elements of the models `uuids`; a picked element may now be hidden, so the picks start over. */
+  function showModels(uuids: string[]) {
+    setShownModels(uuids);
+    setSelectedClassUuid(""); // a pick from a model no longer shown would stay selected but invisible
+    setSelectedRelationclassUuid("");
+    setSelectedPortUuid("");
+  }
+
+  /** A model's box: ticks or unticks that model. */
+  function toggleModel(uuid: string) {
+    showModels(shownModels.includes(uuid) ? shownModels.filter((shown) => shown !== uuid) : [...shownModels, uuid]);
+  }
+
+  /** A scene type's box: ticks all its models, or unticks them all when they all are ticked. */
+  function toggleType(group: ModelGroup) {
+    const ofType = group.models.map((model) => model.uuid); // its models
+    const allTicked = ofType.every((uuid) => shownModels.includes(uuid)); // then the click unticks them
+    showModels(allTicked ? shownModels.filter((uuid) => !ofType.includes(uuid)) : [...new Set([...shownModels, ...ofType])]);
+  }
+
+  /** A scene type's arrow: lists its models, or hides them. */
+  function toggleFold(typeUuid: string) {
+    setUnfoldedTypes(unfoldedTypes.includes(typeUuid) ? unfoldedTypes.filter((uuid) => uuid !== typeUuid) : [...unfoldedTypes, typeUuid]);
+  }
+
   return (
     <Dialog open={open} onClose={close} maxWidth="md" fullWidth>
       <DialogTitle>Reference Attribute: {attributeInstance?.name ?? ""}</DialogTitle>
@@ -275,14 +359,51 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
             />
           )}
 
-          {showGroup(allowedClassInstances.length) && (
+          {showGroup(elementCount) && (
+            <Box>
+              <Typography variant="subtitle2">Show elements from</Typography>
+              <Box sx={{ maxHeight: 220, overflowY: "auto", border: 1, borderColor: "divider", borderRadius: 1, px: 0.5 }}> {/* about six rows; more models scroll inside, the pickers stay in view */}
+                {modelGroups.map((group) => {
+                  const ticked = group.models.filter((model) => shownModels.includes(model.uuid)).length; // how many of its models are shown
+                  const unfolded = unfoldedTypes.includes(group.uuid); // its models listed
+                  return (
+                    <Box key={group.uuid}>
+                      <Box sx={{ display: "flex", alignItems: "center" }}>
+                        <IconButton size="small" aria-label={`${unfolded ? "Fold" : "Unfold"} ${group.name}`} aria-expanded={unfolded} onClick={() => toggleFold(group.uuid)}>
+                          {unfolded ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
+                        </IconButton>
+                        <FormControlLabel
+                          control={<Checkbox size="small" checked={ticked === group.models.length} indeterminate={ticked > 0 && ticked < group.models.length} onChange={() => toggleType(group)} />} // a dash when only some are ticked
+                          label={`${group.name} (${group.models.length})`} // the count tells what a folded type holds
+                          slotProps={{ typography: { sx: { fontWeight: 600 } } }}
+                        />
+                      </Box>
+                      <Collapse in={unfolded} unmountOnExit> {/* a folded type's models are gone, not just hidden */}
+                        {group.models.map((model) => (
+                          <Box key={model.uuid} sx={{ pl: 5 }}> {/* under the type's box */}
+                            <FormControlLabel control={<Checkbox size="small" checked={shownModels.includes(model.uuid)} onChange={() => toggleModel(model.uuid)} />} label={model.label} />
+                          </Box>
+                        ))}
+                      </Collapse>
+                    </Box>
+                  );
+                })}
+              </Box>
+            </Box>
+          )}
+
+          {showGroup(elementCount) && shownClasses.length + shownRelationclasses.length + shownPorts.length === 0 && (
+            <Typography variant="body2">No element of the chosen models can be referenced here. Choose more models above.</Typography> // otherwise the pickers would just vanish
+          )}
+
+          {showGroup(shownClasses.length) && (
             <AllowedGroup
               label="Select Referenced ClassInstance"
               value={selectedClassUuid}
               onChange={setSelectedClassUuid}
-              options={allowedClassInstances.map((o) => ({
+              options={shownClasses.map((o) => ({
                 uuid: o.classInstance.uuid,
-                label: `${getClassInstanceName(o.classInstance)} | ${o.classInstance.uuid}`,
+                label: `${getClassInstanceName(o.classInstance)} | ${o.scene.name} | ${o.classInstance.uuid}`, // the model tells apart elements of the same name
               }))}
               onAdd={() => {
                 const picked = allowedClassInstances.find((o) => o.classInstance.uuid === selectedClassUuid);
@@ -291,14 +412,14 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
             />
           )}
 
-          {showGroup(allowedRelationclassInstances.length) && (
+          {showGroup(shownRelationclasses.length) && (
             <AllowedGroup
               label="Select Referenced RelationclassInstance"
               value={selectedRelationclassUuid}
               onChange={setSelectedRelationclassUuid}
-              options={allowedRelationclassInstances.map((o) => ({
+              options={shownRelationclasses.map((o) => ({
                 uuid: o.relationclassInstance.uuid,
-                label: `${o.relationclassInstance.name} | ${o.relationclassInstance.uuid}`,
+                label: `${o.relationclassInstance.name} | ${o.scene.name} | ${o.relationclassInstance.uuid}`, // with its model, as for classes
               }))}
               onAdd={() => {
                 const picked = allowedRelationclassInstances.find(
@@ -313,14 +434,14 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
             />
           )}
 
-          {showGroup(allowedPortInstances.length) && (
+          {showGroup(shownPorts.length) && (
             <AllowedGroup
               label="Select Referenced PortInstance"
               value={selectedPortUuid}
               onChange={setSelectedPortUuid}
-              options={allowedPortInstances.map((o) => ({
+              options={shownPorts.map((o) => ({
                 uuid: o.portInstance.uuid,
-                label: `${o.portInstance.name} | ${o.portInstance.uuid}`,
+                label: `${o.portInstance.name} | ${o.scene.name} | ${o.portInstance.uuid}`, // with its model, as for classes
               }))}
               onAdd={() => {
                 const picked = allowedPortInstances.find((o) => o.portInstance.uuid === selectedPortUuid);
@@ -351,12 +472,13 @@ function AllowedGroup({
   options: { uuid: string; label: string }[];
   onAdd: () => void;
 }) {
+  const labelId = `ref-${label.replace(/\s+/g, "-")}`; // an id holds no spaces: aria-labelledby would read "ref-Select Referenced ClassInstance" as three ids, and the picker would have no name
   return (
     <Box sx={{ display: "flex", gap: 1 }}>
       <FormControl sx={{ flex: 1 }} required size="small">
-        <InputLabel id={`ref-${label}`}>{label}</InputLabel>
+        <InputLabel id={labelId}>{label}</InputLabel>
         <Select
-          labelId={`ref-${label}`}
+          labelId={labelId}
           label={label}
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -480,8 +602,39 @@ async function resolveReferenceName(roleInstance: RoleInstance): Promise<string>
   return roleInstance.name;
 }
 
+/**
+ * Every loaded model, the one open in the current tab first. That one is taken from the tab,
+ * not from the scene tree: the tab holds its live copy, with elements not saved yet and the
+ * state after an undo, which replaces the tab's copy.
+ */
+async function loadedModels(): Promise<{ models: SceneInstance[]; current: SceneInstance | undefined }> {
+  const current = await instanceUtility.getTabContextSceneInstance(); // undefined when no model is open
+  const others = (await instanceUtility.getAllSceneInstancesFromLocal()).filter((scene) => scene.uuid !== current?.uuid); // the tree's copy of the open model would be stale
+  return { models: current ? [current, ...others] : others, current };
+}
+
+/**
+ * The models under their scene types, as "Show elements from" lists them. Example:
+ *   BPMN 2.0:  Bestellabwicklung – current model, Testmodell 1, Testmodell 2
+ *   Petri Net: Netz A
+ * The types follow the order of their first model, so the current model's type comes first.
+ */
+function groupByType(models: SceneInstance[], current: SceneInstance | undefined): ModelGroup[] {
+  const groups = new Map<string, ModelGroup>(); // scene type uuid -> its group; a Map keeps the order of insertion
+  for (const scene of models) {
+    const typeUuid = scene.uuid_scene_type; // the type it is an instance of
+    if (!groups.has(typeUuid)) {
+      const sceneType = globalObject.sceneTypes?.find((type: { uuid: string }) => type.uuid === typeUuid); // the loaded scene types, as metaUtility reads them
+      groups.set(typeUuid, { uuid: typeUuid, name: sceneType?.name ?? "Unknown scene type", models: [] }); // a type not loaded would otherwise have no heading
+    }
+    groups.get(typeUuid)!.models.push({ uuid: scene.uuid, label: `${scene.name}${scene === current ? " – current model" : ""}` }); // `!`: set just above
+  }
+  return [...groups.values()];
+}
+
 // The four setAllowed*Instances methods: keep only the instances whose meta concept is
-// listed in the Role's *_references.
+// listed in the Role's *_references. Classes, relation classes and ports are collected model
+// by model, so each one knows its model.
 async function collectAllowedSceneInstances(role: Role): Promise<AllowedScene[]> {
   const sceneInstances = await instanceUtility.getAllSceneInstancesFromLocal();
   const allowed: AllowedScene[] = [];
@@ -496,14 +649,15 @@ async function collectAllowedSceneInstances(role: Role): Promise<AllowedScene[]>
   return allowed;
 }
 
-async function collectAllowedClassInstances(role: Role): Promise<AllowedClass[]> {
-  const classInstances = await instanceUtility.getAllClassInstances();
+function collectAllowedClassInstances(role: Role, models: SceneInstance[]): AllowedClass[] {
   const allowed: AllowedClass[] = [];
-  for (const classInstance of classInstances) {
-    for (const classReference of role.class_references ?? []) {
-      if (classInstance.uuid_class === classReference.uuid) {
-        logger.log(`classReference ${classReference.uuid} is allowed`, "done");
-        allowed.push({ classInstance, parentRole: role });
+  for (const scene of models) {
+    for (const classInstance of scene.class_instances ?? []) {
+      for (const classReference of role.class_references ?? []) {
+        if (classInstance.uuid_class === classReference.uuid) {
+          logger.log(`classReference ${classReference.uuid} is allowed`, "done");
+          allowed.push({ classInstance, parentRole: role, scene });
+        }
       }
     }
   }
@@ -515,28 +669,30 @@ async function collectAllowedClassInstances(role: Role): Promise<AllowedClass[]>
   return allowed;
 }
 
-async function collectAllowedRelationclassInstances(role: Role): Promise<AllowedRelationclass[]> {
-  const relationclassInstances = await instanceUtility.getAllRelationClassInstances();
+function collectAllowedRelationclassInstances(role: Role, models: SceneInstance[]): AllowedRelationclass[] {
   const allowed: AllowedRelationclass[] = [];
-  for (const relationclassInstance of relationclassInstances) {
-    for (const relationclassReference of role.relationclass_references ?? []) {
-      if (relationclassInstance.uuid_relationclass === relationclassReference.uuid) {
-        logger.log(`relationclassReference ${relationclassReference.uuid} is allowed`, "done");
-        allowed.push({ relationclassInstance, parentRole: role });
+  for (const scene of models) {
+    for (const relationclassInstance of scene.relationclasses_instances ?? []) {
+      for (const relationclassReference of role.relationclass_references ?? []) {
+        if (relationclassInstance.uuid_relationclass === relationclassReference.uuid) {
+          logger.log(`relationclassReference ${relationclassReference.uuid} is allowed`, "done");
+          allowed.push({ relationclassInstance, parentRole: role, scene });
+        }
       }
     }
   }
   return allowed;
 }
 
-async function collectAllowedPortInstances(role: Role): Promise<AllowedPort[]> {
-  const portInstances = await instanceUtility.getAllPortInstances();
+function collectAllowedPortInstances(role: Role, models: SceneInstance[]): AllowedPort[] {
   const allowed: AllowedPort[] = [];
-  for (const portInstance of portInstances) {
-    for (const portReference of role.port_references ?? []) {
-      if (portInstance.uuid_port === portReference.uuid) {
-        logger.log(`portReference ${portReference.uuid} is allowed`, "done");
-        allowed.push({ portInstance, parentRole: role });
+  for (const scene of models) {
+    for (const portInstance of instanceUtility.portInstancesOf(scene)) { // the scene's own ports and those of its elements
+      for (const portReference of role.port_references ?? []) {
+        if (portInstance.uuid_port === portReference.uuid) {
+          logger.log(`portReference ${portReference.uuid} is allowed`, "done");
+          allowed.push({ portInstance, parentRole: role, scene });
+        }
       }
     }
   }
