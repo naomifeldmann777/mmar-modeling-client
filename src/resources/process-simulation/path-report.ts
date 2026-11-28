@@ -1,8 +1,9 @@
 /**
  * How the results of a path analysis are written out: the element list of one path, as the
- * panel shows it, and the whole result as CSV, for the export.
+ * panel shows it, the distribution of a time over the runs with its figures, for the chart,
+ * and the whole result as CSV, for the export.
  *
- * Used by: the path-analysis panel (element list) and its "Export CSV" button.
+ * Used by: the path-analysis panel (element list, distribution) and its "Export CSV" button.
  *
  * Why in the library and not in the panel: the texts follow from the concepts, not from the
  * client (Plan2 A5: display texts belong with the algorithm, so a new concept is described
@@ -109,6 +110,95 @@ export function conditionText(rows: readonly ConditionRow[]): string {
 }
 
 // ---------------------------------------------------------------------------------
+// The distribution of a time over the runs
+// ---------------------------------------------------------------------------------
+
+/** The times whose distribution can be shown; transport time and distance may follow. */
+export type TimeQuantity = "executionTime" | "cycleTime";
+
+export const MAX_SINGLE_VALUES = 30; // up to this many different values, each one is shown on its own; more are grouped into classes
+export const CLASS_COUNT = 20; // the number of classes of equal width when they are grouped
+
+/** One value, or one class of values, and how many finished runs had it. */
+export interface DistributionEntry {
+  from: number; // seconds; the value itself, or where its class begins
+  to: number; // the same as `from` for a single value; where its class ends
+  runs: number; // finished runs with a time in it
+  share: number; // runs / all finished runs, so the shares add up to 1
+}
+
+/** A time over the finished runs: how often each value occurred, and its figures. */
+export interface TimeDistribution {
+  entries: DistributionEntry[]; // ascending
+  grouped: boolean; // true: the entries are classes (more than MAX_SINGLE_VALUES different values)
+  runs: number; // the finished runs it is taken over
+  mean: number; // the expected value E, the same as the expected time of the summary
+  standardDeviation: number; // σ, how far the times lie from E on average (divided by the number of runs)
+  minimum: number; // the shortest time
+  maximum: number; // the longest
+  quantile90: number; // 90 % of the finished runs took this long or less
+  cumulative: { time: number; share: number }[]; // at every different time, ascending: the share of the finished runs that took this long or less; the last share is 1. Exact also when `entries` are classes
+}
+
+/**
+ * The distribution of `quantity` over the finished runs of `result`, with its figures; null
+ * when no run finished. Only finished runs count, as for the expected times (spec 9.1).
+ *
+ * Example, test model A (ET 6 s with lager = ja, 65 s with nein), 1000 runs, 800 of them ja:
+ *   entries      [{ from: 6, to: 6, runs: 800, share: 0.8 }, { from: 65, to: 65, runs: 200, share: 0.2 }]
+ *   cumulative   [{ time: 6, share: 0.8 }, { time: 65, share: 1 }]
+ *   mean 17.8   standardDeviation 23.6   minimum 6   maximum 65   quantile90 65
+ *
+ * With fixed execution times every path has one time, so there are as many values as paths
+ * with different times. Loops, and later random times, give many values; past
+ * MAX_SINGLE_VALUES they are grouped into CLASS_COUNT classes of equal width (a histogram).
+ */
+export function timeDistribution(result: CompletedAnalysis, quantity: TimeQuantity): TimeDistribution | null {
+  const times = result.allRuns.filter((run) => run.outcome === "finished").map((run) => run[quantity]!).sort((a, b) => a - b); // `!`: a finished run has a cycle time; ascending, for the quantile
+  if (times.length === 0) return null; // nothing to show
+  const n = times.length; // the finished runs
+  const mean = times.reduce((sum, time) => sum + time, 0) / n; // E
+  const standardDeviation = Math.sqrt(times.reduce((sum, time) => sum + (time - mean) ** 2, 0) / n); // σ: the square root of the mean squared distance from E (the variance)
+  const minimum = times[0]; // sorted
+  const maximum = times[n - 1];
+  const quantile90 = times[Math.ceil(0.9 * n) - 1]; // the smallest time that at least 90 % of the runs do not exceed ("nearest rank")
+
+  const counts = new Map<number, number>(); // time -> runs with it, in ascending order since `times` is sorted
+  for (const time of times) counts.set(time, (counts.get(time) ?? 0) + 1);
+  const grouped = counts.size > MAX_SINGLE_VALUES; // too many values to tell apart side by side
+  const values = [...counts].map(([time, runs]) => ({ from: time, to: time, runs, share: runs / n })); // one entry per different time
+  const entries = grouped ? groupIntoClasses(values) : values;
+  let below = 0; // runs up to the time reached so far
+  const cumulative = [...counts].map(([time, runs]) => ({ time, share: (below += runs) / n })); // one step per different time
+  return { entries, grouped, runs: n, mean, standardDeviation, minimum, maximum, quantile90, cumulative };
+}
+
+/** A share as a percentage, e.g. 80 % or 12.5 %; two decimals below 1 %, so a rare path does not read as 0 %. */
+export function formatShare(share: number): string {
+  const percent = share * 100; // e.g. 0.0006 -> 0.06
+  return `${percent > 0 && percent < 1 ? percent.toFixed(2) : String(Math.round(percent * 10) / 10)} %`;
+}
+
+/**
+ * Single values, ascending, added up in CLASS_COUNT classes of equal width from the first to
+ * the last; the last class includes the last value. Used by timeDistribution for more than
+ * MAX_SINGLE_VALUES values, and by the chart when single bars would be too thin to see.
+ * Example: 615 s (39 %), 625 s (17 %), …, 4230 s (1 %) -> 615–795.75 s (56 %), 795.75–976.5 s, …
+ */
+export function groupIntoClasses(values: DistributionEntry[]): DistributionEntry[] {
+  const minimum = values[0].from; // ascending
+  const maximum = values[values.length - 1].from;
+  const width = (maximum - minimum) / CLASS_COUNT; // more than 0 as soon as there are two values
+  const classes = Array.from({ length: CLASS_COUNT }, (_, index) => ({ from: minimum + index * width, to: minimum + (index + 1) * width, runs: 0, share: 0 })); // empty classes too, so the gaps show
+  for (const value of values) {
+    const target = classes[width === 0 ? 0 : Math.min(CLASS_COUNT - 1, Math.floor((value.from - minimum) / width))]; // the maximum would fall just past the last class
+    target.runs += value.runs;
+    target.share += value.share;
+  }
+  return classes;
+}
+
+// ---------------------------------------------------------------------------------
 // CSV
 // ---------------------------------------------------------------------------------
 
@@ -122,6 +212,10 @@ export function pathAnalysisCsv(graph: SimulationGraph, result: CompletedAnalysi
   rows.push(["Path analysis", modelName]); // what was analysed
   rows.push(["Runs", result.runs], ["Seed", result.seed]); // how, so it can be repeated
   rows.push(["Expected execution time (s)", round(result.expectedExecutionTime)], ["Expected cycle time (s)", round(result.expectedCycleTime)]); // spec 9.1
+  for (const [quantity, name] of [["executionTime", "execution time"], ["cycleTime", "cycle time"]] as const) {
+    const distribution = timeDistribution(result, quantity); // null when no run finished: the rows are left out
+    if (distribution) rows.push([`Standard deviation of the ${name} (s)`, round(distribution.standardDeviation)], [`Minimum ${name} (s)`, distribution.minimum], [`Maximum ${name} (s)`, distribution.maximum], [`90 % quantile of the ${name} (s)`, distribution.quantile90]); // how the times spread around the expected one
+  }
   rows.push(["Aborted runs", result.aborted], ["Runs without a further step", result.noStep]); // runs that formed no path
   rows.push([]); // an empty line between the tables
 

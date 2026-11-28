@@ -104,7 +104,10 @@ export default function AppLayout() {
               <LeftNav />
             </Panel>
             <ResizeHandle />
-            <Panel id="canvas" minSize="30">
+            {/* The canvas may shrink to 5 %, so the right column can be dragged almost to the left
+                edge, e.g. for a wide path-analysis result. Not to 0: a canvas without width would
+                give the cameras an aspect ratio of 0 and WebGL an empty drawing buffer. */}
+            <Panel id="canvas" minSize="5">
               {/* The 3D canvas fills the panel; the AR/VR entry button is an
                   absolutely-positioned overlay on top of it. */}
               <Box sx={{ position: "relative", height: "100%", width: "100%", backgroundColor: "#ffffff" }}>
@@ -113,7 +116,7 @@ export default function AppLayout() {
               </Box>
             </Panel>
             <ResizeHandle />
-            <Panel id="right-nav" defaultSize="22" minSize="0" maxSize="40">
+            <Panel id="right-nav" defaultSize="22" minSize="0" /* no maxSize: as wide as the canvas allows */>
               <RightNav />
             </Panel>
           </Group>

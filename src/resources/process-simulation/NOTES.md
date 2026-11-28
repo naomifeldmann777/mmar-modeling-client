@@ -535,6 +535,30 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
   analyses, in 100000 runs almost always. Measured on that model (23 nodes): 100000 runs take
   about 11 s, during which the client takes no click, and the result keeps about 260 MB.
 
+### Phase 14: distribution of the times (path analysis)
+
+- `timeDistribution(result, "executionTime" | "cycleTime")` (`path-report.ts`): over the
+  finished runs, the share of each value, E, σ (divided by n), minimum, maximum, the 90 %
+  quantile (nearest rank) and the cumulative share at every different time. More than 30
+  different values are grouped into 20 classes of equal width; the cumulative steps stay exact.
+- Panel: "Distribution over the runs" below the summary, with "Execution time | Cycle time" and
+  "Per value | Cumulative"; the figures E, σ, Min, Max, 90 % underneath; the values as a table,
+  folded away. Chart (`TimeDistributionChart.tsx`): plain SVG, the theme's colours; per value a
+  bar per value (at most 24 px, narrower when values lie close, a 2 px sliver for a share too
+  small to see) or per class; cumulative a step line with a dashed 90 % line and "90 % finish
+  within X s". Never a line through the values: there are no times between them. No hover, no
+  click and no numbers on the bars (decided with the user): the table has every value.
+- Single bars are all equally wide, as wide as the closest two times allow. When that is less
+  than 6 px, the chart draws 20 classes instead (`groupIntoClasses`) and says so; the table
+  still lists every time. So a model looks the same with 1000 and with 100 000 runs.
+- The 90 % label goes where the steps cannot cover it: left of the quantile above the 90 % line
+  (the steps are below 90 % there), else right of it below the line; if neither has room, the
+  short "90 %: X s".
+- CSV: σ, minimum, maximum and 90 % quantile of both times in the summary.
+- With fixed execution times every path has one time, so the distribution has as many values as
+  paths with different times; it spreads within a path only once times are random.
+- Layout: the right column may be dragged until the canvas is 5 % wide (before: at most 40 %).
+
 ## Findings of Phase 0 for later phases
 
 These were the open findings of Phase 0; they are answered in the section above, except

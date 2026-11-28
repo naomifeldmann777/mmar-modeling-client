@@ -362,7 +362,7 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
           {showGroup(elementCount) && (
             <Box>
               <Typography variant="subtitle2">Show elements from</Typography>
-              <Box sx={{ maxHeight: 220, overflowY: "auto", border: 1, borderColor: "divider", borderRadius: 1, px: 0.5 }}> {/* about six rows; more models scroll inside, the pickers stay in view */}
+              <Box sx={{ maxHeight: 220, overflowY: "auto", border: 1, borderColor: "divider", borderRadius: 1, px: 0.5 }} /* about six rows; more models scroll inside, the pickers stay in view */>
                 {modelGroups.map((group) => {
                   const ticked = group.models.filter((model) => shownModels.includes(model.uuid)).length; // how many of its models are shown
                   const unfolded = unfoldedTypes.includes(group.uuid); // its models listed
@@ -378,9 +378,9 @@ export default function ReferenceAttributeDialog({ onChanged }: ReferenceAttribu
                           slotProps={{ typography: { sx: { fontWeight: 600 } } }}
                         />
                       </Box>
-                      <Collapse in={unfolded} unmountOnExit> {/* a folded type's models are gone, not just hidden */}
+                      <Collapse in={unfolded} unmountOnExit /* a folded type's models are gone, not just hidden */>
                         {group.models.map((model) => (
-                          <Box key={model.uuid} sx={{ pl: 5 }}> {/* under the type's box */}
+                          <Box key={model.uuid} sx={{ pl: 5 }} /* under the type's box */>
                             <FormControlLabel control={<Checkbox size="small" checked={shownModels.includes(model.uuid)} onChange={() => toggleModel(model.uuid)} />} label={model.label} />
                           </Box>
                         ))}

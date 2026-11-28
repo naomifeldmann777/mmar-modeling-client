@@ -12,6 +12,8 @@ import {
   Button,
 } from "@mui/material";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess"; // folded: the log opens upwards
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore"; // open: the log folds down to its title
 import { useThrottledLogArray, type LogEntry } from "@/resources/store/logStore";
 
 // One row. Memoised, and the sx objects are hoisted to module constants, so a row whose
@@ -60,7 +62,11 @@ function LogEntries() {
 
 // A scrollable "Log" panel with an expand-to-dialog button. Newest entries are at the
 // top, so the scroll position is pinned to the top as entries arrive.
-export default function LogWindow() {
+//
+// It can be folded to its title line, to give the panels above it the room (`folded`,
+// `onToggleFold`): RightNav keeps the state, since it also decides how much height the log
+// takes. Folded, the entries are not rendered at all; the dialog still shows them.
+export default function LogWindow({ folded = false, onToggleFold }: { folded?: boolean; onToggleFold?: () => void }) {
   const [open, setOpen] = useState(false);
   const logArray = useThrottledLogArray();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -70,7 +76,7 @@ export default function LogWindow() {
   }, [logArray.length]);
 
   return (
-    <Box sx={{ height: "100%", overflowY: "auto", p: 1 }} ref={scrollRef}>
+    <Box sx={{ height: "100%", overflowY: folded ? "hidden" : "auto", p: 1 }} ref={scrollRef}>
       <Typography
         variant="subtitle2"
         sx={{
@@ -85,9 +91,14 @@ export default function LogWindow() {
         }}
       >
         Log
-        <IconButton size="small" onClick={() => setOpen(true)}>
+        <IconButton size="small" onClick={() => setOpen(true)} aria-label="Show the log in a dialog">
           <OpenInFullIcon fontSize="small" />
         </IconButton>
+        {onToggleFold && ( // only where the place around the log can give up its height
+          <IconButton size="small" onClick={onToggleFold} aria-label={folded ? "Show the log" : "Hide the log"} aria-expanded={!folded} sx={{ ml: "auto" }}>
+            {folded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+          </IconButton>
+        )}
       </Typography>
 
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="md" fullWidth>
@@ -102,7 +113,7 @@ export default function LogWindow() {
         </DialogActions>
       </Dialog>
 
-      <LogEntries />
+      {!folded && <LogEntries />}
     </Box>
   );
 }

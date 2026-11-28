@@ -7,6 +7,11 @@
  *   "Value" to repeat an analysis exactly, and "Start";
  * - a note when the model was changed after the analysis, or why the analysis could not run;
  * - the summary: runs, expected execution and cycle time, runs that did not finish, the seed;
+ * - the distribution of the execution or the cycle time over the finished runs: a chart
+ *   (TimeDistributionChart), per value (a bar per value) or cumulative (steps, with the 90 %
+ *   line), the figures E, σ, minimum, maximum and the 90 % quantile, and the values as a table,
+ *   folded away. BEE-UP shows only the expected times; since every run is kept here, the spread
+ *   can be shown as well;
  * - the paths: number, probability, execution time, cycle time, sortable. A click on a path
  *   shows it in the model (path-highlight) and lists its elements below the table, the
  *   branches of a split indented and marked "*", as in BEE-UP (path-report);
@@ -40,14 +45,17 @@ import {
   TableRow,
   TableSortLabel,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import type { SimulationGraph } from "@/resources/process-simulation/graph";
 import { DEFAULT_RUNS, MAX_RUNS } from "@/resources/process-simulation/path-analysis"; // the proposed and the largest number of runs
-import { pathLines, type CompletedAnalysis } from "@/resources/process-simulation/path-report"; // the element list of a path
+import { pathLines, timeDistribution, type CompletedAnalysis, type TimeQuantity } from "@/resources/process-simulation/path-report"; // the element list of a path; the distribution of a time
 import { usePathAnalysisStore, type PathSort } from "@/resources/store/pathAnalysisStore";
 import { clearPathHighlight, PATH_COLOUR, showPath } from "./path-highlight"; // the selected path in the 3D model, and its colour
 import { closePathAnalysis, exportPathAnalysis, runPathAnalysis } from "./path-analysis-session"; // what touches the model or the browser
+import TimeDistributionChart, { type DistributionView } from "./TimeDistributionChart"; // the distribution as a chart
 
 export default function PathAnalysisPanel() {
   const graph = usePathAnalysisStore((s) => s.graph); // the model as analysed
@@ -118,6 +126,7 @@ export default function PathAnalysisPanel() {
       {graph && result && (
         <>
           <Summary result={result} />
+          <Distribution result={result} />
           <PathTable result={result} sort={sort} selected={selectedPath} stale={stale} onSort={sortBy} onSelect={(index) => select(index === selectedPath ? null : index)} />
           {selectedPath !== null && <PathDetails graph={graph} result={result} index={selectedPath} />}
           <NodeExecutions graph={graph} result={result} />
@@ -165,6 +174,83 @@ function Summary({ result }: { result: CompletedAnalysis }) {
         {notes.join(" · ")}
       </Typography>
     </Paper>
+  );
+}
+
+/** How the chosen time spreads over the finished runs: the chart, its figures, and its values as a table. */
+function Distribution({ result }: { result: CompletedAnalysis }) {
+  const [quantity, setQuantity] = useState<TimeQuantity>("executionTime"); // ET first, as in the summary
+  const [view, setView] = useState<DistributionView>("perValue"); // the share of each value first; the cumulative view on request
+  const distribution = timeDistribution(result, quantity); // null when no run finished
+  const name = quantity === "executionTime" ? "execution time" : "cycle time"; // for the chart's description
+  const figures: [string, string][] = distribution
+    ? [
+        ["E", seconds(distribution.mean)], // the expected value, as in the summary
+        ["σ", seconds(distribution.standardDeviation)], // the standard deviation; the variance is its square, in s²
+        ["Min", seconds(distribution.minimum)],
+        ["Max", seconds(distribution.maximum)],
+        ["90 %", seconds(distribution.quantile90)], // 90 % of the runs took this long or less
+      ]
+    : [];
+  return (
+    <Section title="Distribution over the runs">
+      <ToggleButtonGroup size="small" exclusive value={quantity} onChange={(_, value: TimeQuantity | null) => value && setQuantity(value)} sx={{ my: 0.5 }} /* null: the chosen one was clicked again, which keeps it */>
+        <ToggleButton value="executionTime" sx={{ textTransform: "none" }} /* written out: "ET" and "CT" already sort the path table */>Execution time</ToggleButton>
+        <ToggleButton value="cycleTime" sx={{ textTransform: "none" }}>Cycle time</ToggleButton>
+      </ToggleButtonGroup>
+      <ToggleButtonGroup size="small" exclusive value={view} onChange={(_, value: DistributionView | null) => value && setView(value)} sx={{ my: 0.5, ml: 1 }}>
+        <ToggleButton value="perValue" sx={{ textTransform: "none" }}>Per value</ToggleButton>
+        <ToggleButton value="cumulative" sx={{ textTransform: "none" }}>Cumulative</ToggleButton>
+      </ToggleButtonGroup>
+      {distribution === null ? (
+        <Typography variant="body2">No run reached an End element.</Typography>
+      ) : (
+        <Paper variant="outlined" sx={{ p: 1 }}>
+          <TimeDistributionChart distribution={distribution} name={name} view={view} />
+          <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
+            {figures.map(([label, value]) => (
+              <Box key={label} sx={{ flex: 1, textAlign: "center" }}>
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                  {value}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {label}
+                </Typography>
+              </Box>
+            ))}
+          </Stack>
+          <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
+            Over the {distribution.runs} finished runs. σ: how far the times lie from E on average. 90 %: nine in ten runs took this long or less.
+            {distribution.grouped ? " More than 30 different times: grouped into 20 classes of equal width." : ""}
+          </Typography>
+          <Accordion disableGutters variant="outlined" slotProps={{ transition: { unmountOnExit: true } }} sx={{ mt: 1 }} /* the table view: every value without hovering */>
+            <AccordionSummary>
+              <Typography variant="subtitle2">Values as a table</Typography>
+            </AccordionSummary>
+            <AccordionDetails sx={{ p: 0 }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>{distribution.grouped ? "From – to" : "Time"}</TableCell>
+                    <TableCell align="right">Runs</TableCell>
+                    <TableCell align="right">Share</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {distribution.entries.map((entry) => (
+                    <TableRow key={entry.from}>
+                      <TableCell>{entry.from === entry.to ? seconds(entry.from) : `${seconds(entry.from)} – ${seconds(entry.to)}`}</TableCell>
+                      <TableCell align="right">{entry.runs}</TableCell>
+                      <TableCell align="right">{percent(entry.share)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </AccordionDetails>
+          </Accordion>
+        </Paper>
+      )}
+    </Section>
   );
 }
 

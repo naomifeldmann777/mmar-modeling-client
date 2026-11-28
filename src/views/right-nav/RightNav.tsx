@@ -1,3 +1,4 @@
+import { useState } from "react"; // whether the log is folded
 import { Box, Divider } from "@mui/material";
 import { useStateStore } from "@/resources/store/stateStore";
 import LogWindow from "@/views/log-window/LogWindow";
@@ -17,12 +18,16 @@ import { usePathAnalysisStore } from "@/resources/store/pathAnalysisStore"; // w
 //
 // The simulation window is mounted ONLY in simulation mode, so it rebuilds its sliders
 // on every entry into that mode rather than showing a stale list.
+//
+// The log takes 40 % of the column, or only its title line when the user folds it, so a
+// long panel above (e.g. a path analysis) gets the whole height.
 export default function RightNav() {
   const activeState = useStateStore((s) => s.activeState);
   const isSimulation = activeState === "SimulationMode";
   const stepperOpen = useProcessSimulationStore((s) => s.active); // set by stepper-session when the stepper starts
   const pathAnalysisOpen = usePathAnalysisStore((s) => s.active); // set by path-analysis-session when the panel opens
   const editor = isSimulation ? <SimulationWindow /> : <AttributeWindow />; // what the column shows for the mode
+  const [logFolded, setLogFolded] = useState(false); // open at first, as before
 
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -39,8 +44,8 @@ export default function RightNav() {
           editor
         )}
       </Box>
-      <Box sx={{ flex: "0 0 40%", minHeight: 0, borderTop: "1px solid", borderColor: "divider" }}>
-        <LogWindow />
+      <Box sx={{ flex: logFolded ? "0 0 auto" : "0 0 40%", minHeight: 0, borderTop: "1px solid", borderColor: "divider" }} /* folded: as high as the title line */>
+        <LogWindow folded={logFolded} onToggleFold={() => setLogFolded(!logFolded)} />
       </Box>
     </Box>
   );

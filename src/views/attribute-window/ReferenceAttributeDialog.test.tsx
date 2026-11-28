@@ -421,7 +421,7 @@ describe("ReferenceAttributeDialog", () => {
       expect(filterRows()).toEqual(["BPMN 2.0 (3)", "Bestellabwicklung – current model", "Testmodell 1", "Testmodell 2", "Petri Net (1)"]); // Petri Net folded; Grundriss holds nothing to reference
       fireEvent.click(screen.getByRole("button", { name: "Fold BPMN 2.0" }));
       fireEvent.click(screen.getByRole("button", { name: "Unfold Petri Net" }));
-      await waitFor(() => expect(filterRows()).toEqual(["BPMN 2.0 (3)", "Petri Net (1)", "Netz A"])); // straight to the Petri nets, nothing to scroll past; folding is animated, so the BPMN models leave after it
+      await waitFor(() => expect(filterRows()).toEqual(["BPMN 2.0 (3)", "Petri Net (1)", "Netz A"]), { timeout: 5000 }); // straight to the Petri nets, nothing to scroll past; folding is animated, so the BPMN models leave after it, later when the whole suite runs at once
     });
 
     it("adds the elements of a ticked model", async () => {

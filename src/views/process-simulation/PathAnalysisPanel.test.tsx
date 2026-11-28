@@ -130,6 +130,24 @@ describe("PathAnalysisPanel", () => {
     expect(screen.queryByRole("button", { name: "Export CSV" })).toBeNull(); // nothing to export
   });
 
+  it("shows the distribution of the execution time with its figures, and of the cycle time on request", () => {
+    withResult(); // model A: ET 6 s (lager = ja) or 65 s (nein)
+    const chart = screen.getByRole("img", { name: "Distribution of the execution time over the finished runs" });
+    expect(chart.querySelectorAll("path")).toHaveLength(2); // a bar for 6 s and one for 65 s
+    expect(screen.getByText("σ")).toBeTruthy(); // the figures next to the chart
+    expect(screen.getByText("90 %")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cycle time" }));
+    expect(screen.getByRole("img", { name: "Distribution of the cycle time over the finished runs" })).toBeTruthy();
+    fireEvent.click(screen.getByText("Values as a table")); // the table view
+    const valuesTable = screen.getByRole("columnheader", { name: "Time" }).closest("table")!; // the distribution's table, not the path table
+    expect(within(valuesTable).getAllByRole("row").map((row) => (row as HTMLTableRowElement).cells[0].textContent)).toEqual(["Time", "6 s", "65 s"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cumulative" }));
+    expect(screen.getByRole("img", { name: "Cumulative distribution of the cycle time over the finished runs" })).toBeTruthy();
+    expect(screen.getByText("90 % finish within 65 s")).toBeTruthy(); // one branch at a time, so CT = ET: about 80 % take 6 s, so 90 % are only done at 65 s
+  });
+
   it("exports and closes through the session", () => {
     withResult();
     click("Export CSV");

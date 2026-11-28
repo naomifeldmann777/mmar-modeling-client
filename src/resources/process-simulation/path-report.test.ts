@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import type { ConditionRow, GraphFlow, GraphGenerator, GraphNode, SimulationGraph } from "./graph";
 import { analysePaths } from "./path-analysis";
-import { pathAnalysisCsv, pathLines, type CompletedAnalysis } from "./path-report";
+import { CLASS_COUNT, formatShare, groupIntoClasses, pathAnalysisCsv, pathLines, timeDistribution, type CompletedAnalysis } from "./path-report";
 import type { NodeConcept } from "./vocabulary";
 
 // Builders, as in path-analysis.test.ts
@@ -107,5 +107,58 @@ describe("pathAnalysisCsv", () => {
     expect(lines).toContain(`Node;Executions;Mean per run`);
     expect(lines).toContain(`"Start ""start""";4;1`); // the Start ran once per run
     expect(lines.filter((line) => /^\d+;finished;\d+;/.test(line))).toHaveLength(4); // one line per run
+  });
+});
+
+describe("timeDistribution", () => {
+  /** A finished analysis whose finished runs have the execution times `times`, and one run that did not finish. */
+  function withTimes(times: number[]): CompletedAnalysis {
+    const runs = times.map((time) => ({ outcome: "finished" as const, trace: [], executionTime: time, cycleTime: time + 1, path: 0 }));
+    return { ok: true, runs: times.length + 1, seed: 1, paths: [], allRuns: [...runs, { outcome: "aborted", trace: [], executionTime: 999, cycleTime: null, path: null }], noStep: 0, aborted: 1, expectedExecutionTime: null, expectedCycleTime: null, nodeExecutions: {} };
+  }
+
+  it("counts each value over the finished runs, with E, σ, minimum, maximum and the 90 % quantile", () => {
+    const distribution = timeDistribution(withTimes([...Array(8).fill(6), 65, 65]), "executionTime")!; // 80 % 6 s, 20 % 65 s; the aborted run's 999 s does not count
+    expect(distribution.entries).toEqual([{ from: 6, to: 6, runs: 8, share: 0.8 }, { from: 65, to: 65, runs: 2, share: 0.2 }]);
+    expect(distribution.grouped).toBe(false);
+    expect(distribution.mean).toBeCloseTo(17.8, 10); // 0.8 × 6 + 0.2 × 65
+    expect(distribution.standardDeviation).toBeCloseTo(23.6, 10); // √(0.8 × 11.8² + 0.2 × 47.2²)
+    expect([distribution.minimum, distribution.maximum, distribution.quantile90]).toEqual([6, 65, 65]); // the 9th of 10 sorted times is 65
+    expect(distribution.cumulative).toEqual([{ time: 6, share: 0.8 }, { time: 65, share: 1 }]); // 80 % took 6 s or less, all 65 s or less
+    expect(timeDistribution(withTimes([6, 65]), "cycleTime")!.entries.map((entry) => entry.from)).toEqual([7, 66]); // the other quantity
+  });
+
+  it("groups more than 30 different values into 20 classes of equal width", () => {
+    const distribution = timeDistribution(withTimes(Array.from({ length: 40 }, (_, i) => i * 10)), "executionTime")!; // 0, 10, …, 390 s
+    expect(distribution.grouped).toBe(true);
+    expect(distribution.entries).toHaveLength(CLASS_COUNT);
+    expect(distribution.entries[0]).toEqual({ from: 0, to: 19.5, runs: 2, share: 0.05 }); // 0 and 10 s
+    expect(distribution.entries[CLASS_COUNT - 1]).toEqual({ from: 370.5, to: 390, runs: 2, share: 0.05 }); // 380 and 390 s: the maximum is in the last class
+    expect(distribution.cumulative).toHaveLength(40); // the steps stay exact: one per different time, not per class
+    expect(distribution.cumulative[3]).toEqual({ time: 30, share: 0.1 });
+  });
+
+  it("writes a share with one decimal, a rare one with two so it does not read as 0 %", () => {
+    expect([formatShare(0.8), formatShare(0.39555), formatShare(0.0006), formatShare(0)]).toEqual(["80 %", "39.6 %", "0.06 %", "0 %"]);
+  });
+
+  it("adds single values up in classes, as the chart does when its bars would be too thin", () => {
+    const classes = groupIntoClasses([{ from: 615, to: 615, runs: 39, share: 0.39 }, { from: 625, to: 625, runs: 17, share: 0.17 }, { from: 4230, to: 4230, runs: 44, share: 0.44 }]);
+    expect(classes).toHaveLength(CLASS_COUNT);
+    expect(classes[0]).toEqual({ from: 615, to: 795.75, runs: 56, share: 0.56 }); // 615 and 625 s together
+    expect(classes[CLASS_COUNT - 1]).toEqual({ from: 4049.25, to: 4230, runs: 44, share: 0.44 }); // the last value in the last class
+    expect(classes.slice(1, -1).every((entry) => entry.runs === 0)).toBe(true);
+  });
+
+  it("is null when no run finished", () => {
+    expect(timeDistribution(withTimes([]), "executionTime")).toBeNull();
+  });
+
+  it("is in the CSV as the spread of both times", () => {
+    const lines = pathAnalysisCsv(beeUp, analysed(beeUp, 4), "Order").split("\r\n");
+    expect(lines.filter((line) => /^(Standard deviation|Minimum|Maximum|90 % quantile)/.test(line)).map((line) => line.split(";")[0])).toEqual([
+      "Standard deviation of the execution time (s)", "Minimum execution time (s)", "Maximum execution time (s)", "90 % quantile of the execution time (s)",
+      "Standard deviation of the cycle time (s)", "Minimum cycle time (s)", "Maximum cycle time (s)", "90 % quantile of the cycle time (s)",
+    ]);
   });
 });
