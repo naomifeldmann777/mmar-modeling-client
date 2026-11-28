@@ -143,6 +143,11 @@ describe("PathAnalysisPanel", () => {
     const valuesTable = screen.getByRole("columnheader", { name: "Time" }).closest("table")!; // the distribution's table, not the path table
     expect(within(valuesTable).getAllByRole("row").map((row) => (row as HTMLTableRowElement).cells[0].textContent)).toEqual(["Time", "6 s", "65 s"]);
 
+    expect(screen.getByText(/^E ± \d+(\.\d+)? s$/)).toBeTruthy(); // 1000 runs: E with its confidence interval
+
+    fireEvent.click(screen.getByRole("button", { name: "Convergence" }));
+    expect(screen.getByRole("img", { name: "Mean cycle time over the number of runs, with its 95 % confidence interval" })).toBeTruthy();
+
     fireEvent.click(screen.getByRole("button", { name: "Cumulative" }));
     expect(screen.getByRole("img", { name: "Cumulative distribution of the cycle time over the finished runs" })).toBeTruthy();
     expect(screen.getByText("90 % finish within 65 s")).toBeTruthy(); // one branch at a time, so CT = ET: about 80 % take 6 s, so 90 % are only done at 65 s

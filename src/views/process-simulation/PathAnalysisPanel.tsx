@@ -9,9 +9,9 @@
  * - the summary: runs, expected execution and cycle time, runs that did not finish, the seed;
  * - the distribution of the execution or the cycle time over the finished runs: a chart
  *   (TimeDistributionChart), per value (a bar per value) or cumulative (steps, with the 90 %
- *   line), the figures E, σ, minimum, maximum and the 90 % quantile, and the values as a table,
- *   folded away. BEE-UP shows only the expected times; since every run is kept here, the spread
- *   can be shown as well;
+ *   line), or how the mean converges as runs are added (ConvergenceChart, with its 95 %
+ *   confidence band); the figures E with its confidence interval, σ, minimum, maximum and the
+ *   90 % quantile, and the values as a table, folded away;
  * - the paths: number, probability, execution time, cycle time, sortable. A click on a path
  *   shows it in the model (path-highlight) and lists its elements below the table, the
  *   branches of a split indented and marked "*", as in BEE-UP (path-report);
@@ -25,7 +25,7 @@
  * Path numbers are the order by probability (path 1 is the most probable, as in BEE-UP) and
  * stay with the path when the table is sorted otherwise.
  */
-import { useEffect, useState, type ReactNode } from "react"; // the settings, and the highlighting in step with the selection
+import { useEffect, useMemo, useState, type ReactNode } from "react"; // the settings, the highlighting in step with the selection, the figures computed once per time
 import {
   Accordion,
   AccordionDetails,
@@ -51,10 +51,11 @@ import {
 } from "@mui/material";
 import type { SimulationGraph } from "@/resources/process-simulation/graph";
 import { DEFAULT_RUNS, MAX_RUNS } from "@/resources/process-simulation/path-analysis"; // the proposed and the largest number of runs
-import { pathLines, timeDistribution, type CompletedAnalysis, type TimeQuantity } from "@/resources/process-simulation/path-report"; // the element list of a path; the distribution of a time
+import { convergence, pathLines, timeDistribution, type CompletedAnalysis, type TimeQuantity } from "@/resources/process-simulation/path-report"; // the element list of a path; the distribution of a time and how its mean converges
 import { usePathAnalysisStore, type PathSort } from "@/resources/store/pathAnalysisStore";
 import { clearPathHighlight, PATH_COLOUR, showPath } from "./path-highlight"; // the selected path in the 3D model, and its colour
 import { closePathAnalysis, exportPathAnalysis, runPathAnalysis } from "./path-analysis-session"; // what touches the model or the browser
+import ConvergenceChart from "./ConvergenceChart"; // how the mean settles over the runs
 import TimeDistributionChart, { type DistributionView } from "./TimeDistributionChart"; // the distribution as a chart
 
 export default function PathAnalysisPanel() {
@@ -180,12 +181,13 @@ function Summary({ result }: { result: CompletedAnalysis }) {
 /** How the chosen time spreads over the finished runs: the chart, its figures, and its values as a table. */
 function Distribution({ result }: { result: CompletedAnalysis }) {
   const [quantity, setQuantity] = useState<TimeQuantity>("executionTime"); // ET first, as in the summary
-  const [view, setView] = useState<DistributionView>("perValue"); // the share of each value first; the cumulative view on request
-  const distribution = timeDistribution(result, quantity); // null when no run finished
+  const [view, setView] = useState<DistributionView | "convergence">("perValue"); // the share of each value first; the others on request
+  const distribution = useMemo(() => timeDistribution(result, quantity), [result, quantity]); // null when no run finished; sorting 100 000 runs once, not on every render
+  const points = useMemo(() => convergence(result, quantity), [result, quantity]); // the mean after k runs
   const name = quantity === "executionTime" ? "execution time" : "cycle time"; // for the chart's description
   const figures: [string, string][] = distribution
     ? [
-        ["E", seconds(distribution.mean)], // the expected value, as in the summary
+        [distribution.halfWidth95 === null ? "E" : `E ± ${seconds(distribution.halfWidth95)}`, seconds(distribution.mean)], // the expected value, as in the summary, and how sure it is
         ["σ", seconds(distribution.standardDeviation)], // the standard deviation; the variance is its square, in s²
         ["Min", seconds(distribution.minimum)],
         ["Max", seconds(distribution.maximum)],
@@ -198,15 +200,16 @@ function Distribution({ result }: { result: CompletedAnalysis }) {
         <ToggleButton value="executionTime" sx={{ textTransform: "none" }} /* written out: "ET" and "CT" already sort the path table */>Execution time</ToggleButton>
         <ToggleButton value="cycleTime" sx={{ textTransform: "none" }}>Cycle time</ToggleButton>
       </ToggleButtonGroup>
-      <ToggleButtonGroup size="small" exclusive value={view} onChange={(_, value: DistributionView | null) => value && setView(value)} sx={{ my: 0.5, ml: 1 }}>
+      <ToggleButtonGroup size="small" exclusive value={view} onChange={(_, value: DistributionView | "convergence" | null) => value && setView(value)} sx={{ my: 0.5, ml: 1 }}>
         <ToggleButton value="perValue" sx={{ textTransform: "none" }}>Per value</ToggleButton>
         <ToggleButton value="cumulative" sx={{ textTransform: "none" }}>Cumulative</ToggleButton>
+        <ToggleButton value="convergence" sx={{ textTransform: "none" }}>Convergence</ToggleButton>
       </ToggleButtonGroup>
       {distribution === null ? (
         <Typography variant="body2">No run reached an End element.</Typography>
       ) : (
         <Paper variant="outlined" sx={{ p: 1 }}>
-          <TimeDistributionChart distribution={distribution} name={name} view={view} />
+          {view === "convergence" ? <ConvergenceChart points={points} name={name} /> : <TimeDistributionChart distribution={distribution} name={name} view={view} />}
           <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
             {figures.map(([label, value]) => (
               <Box key={label} sx={{ flex: 1, textAlign: "center" }}>
@@ -220,7 +223,7 @@ function Distribution({ result }: { result: CompletedAnalysis }) {
             ))}
           </Stack>
           <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
-            Over the {distribution.runs} finished runs. σ: how far the times lie from E on average. 90 %: nine in ten runs took this long or less.
+            Over the {distribution.runs} finished runs.{distribution.halfWidth95 === null ? "" : " ±: the 95 % confidence interval of E; more runs make it narrower."} σ: how far the times lie from E on average. 90 %: nine in ten runs took this long or less.
             {distribution.grouped ? " More than 30 different times: grouped into 20 classes of equal width." : ""}
           </Typography>
           <Accordion disableGutters variant="outlined" slotProps={{ transition: { unmountOnExit: true } }} sx={{ mt: 1 }} /* the table view: every value without hovering */>

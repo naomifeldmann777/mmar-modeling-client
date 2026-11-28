@@ -559,6 +559,25 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
   paths with different times; it spreads within a path only once times are random.
 - Layout: the right column may be dragged until the canvas is 5 % wide (before: at most 40 %).
 
+### Phase 15: how the mean converges (path analysis)
+
+- `convergence(result, quantity)` (`path-report.ts`): the mean of ET or CT after the first k
+  finished runs, in the order the runs were made, with half the width of its 95 % confidence
+  interval, 1.96 · s / √k (s divided by k − 1), from 30 runs on. One pass (Welford's method);
+  at most 400 points, spread evenly on a logarithmic scale (every run at first, further apart
+  later), with the first and the last.
+- `TimeDistribution.halfWidth95`: the same for all finished runs; the panel shows "E ± x s"
+  among the figures, the CSV has a row "95 % confidence interval of the expected … (± s)".
+- Panel: a third view "Convergence" next to "Per value | Cumulative" (`ConvergenceChart.tsx`):
+  the line of the means, the band as a 30 % wash, a line at the final mean E. A line is right
+  here: there is a mean for every k. No hover, as for the distribution. The runs axis is
+  logarithmic (1, 10, 100, … equally far apart): on a linear axis to 100 000 the first thousand
+  runs, where the mean still moves, took one hundredth of the width.
+- Static, after the analysis. Drawing it while the runs are made would need the analysis to
+  run in portions (asynchronously); planned as a possible next step, it would also stop the
+  client from freezing for 100 000 runs.
+- `chart-scale.ts`: the axis helpers of both charts (clean ticks, share axis top, numbers).
+
 ## Findings of Phase 0 for later phases
 
 These were the open findings of Phase 0; they are answered in the section above, except

@@ -1,7 +1,7 @@
 /**
  * How the results of a path analysis are written out: the element list of one path, as the
- * panel shows it, the distribution of a time over the runs with its figures, for the chart,
- * and the whole result as CSV, for the export.
+ * panel shows it, the distribution of a time over the runs with its figures and how its mean
+ * converges, for the charts, and the whole result as CSV, for the export.
  *
  * Used by: the path-analysis panel (element list, distribution) and its "Export CSV" button.
  *
@@ -118,6 +118,9 @@ export type TimeQuantity = "executionTime" | "cycleTime";
 
 export const MAX_SINGLE_VALUES = 30; // up to this many different values, each one is shown on its own; more are grouped into classes
 export const CLASS_COUNT = 20; // the number of classes of equal width when they are grouped
+export const MIN_RUNS_FOR_INTERVAL = 30; // a confidence interval from fewer runs is not trustworthy: σ itself is too uncertain, and the mean not yet near a normal distribution
+export const MAX_CONVERGENCE_POINTS = 400; // more points than this add nothing a chart in the panel can show, and 100 000 would slow it down
+const Z_95 = 1.96; // 95 % of a normal distribution lie within ±1.96 standard deviations of its mean
 
 /** One value, or one class of values, and how many finished runs had it. */
 export interface DistributionEntry {
@@ -137,6 +140,7 @@ export interface TimeDistribution {
   minimum: number; // the shortest time
   maximum: number; // the longest
   quantile90: number; // 90 % of the finished runs took this long or less
+  halfWidth95: number | null; // E is known to ± this with 95 % confidence (see confidenceHalfWidth); null for fewer than MIN_RUNS_FOR_INTERVAL runs
   cumulative: { time: number; share: number }[]; // at every different time, ascending: the share of the finished runs that took this long or less; the last share is 1. Exact also when `entries` are classes
 }
 
@@ -147,7 +151,7 @@ export interface TimeDistribution {
  * Example, test model A (ET 6 s with lager = ja, 65 s with nein), 1000 runs, 800 of them ja:
  *   entries      [{ from: 6, to: 6, runs: 800, share: 0.8 }, { from: 65, to: 65, runs: 200, share: 0.2 }]
  *   cumulative   [{ time: 6, share: 0.8 }, { time: 65, share: 1 }]
- *   mean 17.8   standardDeviation 23.6   minimum 6   maximum 65   quantile90 65
+ *   mean 17.8   standardDeviation 23.6   minimum 6   maximum 65   quantile90 65   halfWidth95 1.46
  *
  * With fixed execution times every path has one time, so there are as many values as paths
  * with different times. Loops, and later random times, give many values; past
@@ -170,13 +174,68 @@ export function timeDistribution(result: CompletedAnalysis, quantity: TimeQuanti
   const entries = grouped ? groupIntoClasses(values) : values;
   let below = 0; // runs up to the time reached so far
   const cumulative = [...counts].map(([time, runs]) => ({ time, share: (below += runs) / n })); // one step per different time
-  return { entries, grouped, runs: n, mean, standardDeviation, minimum, maximum, quantile90, cumulative };
+  const squares = times.reduce((sum, time) => sum + (time - mean) ** 2, 0); // the squared distances from E, added up
+  return { entries, grouped, runs: n, mean, standardDeviation, minimum, maximum, quantile90, cumulative, halfWidth95: confidenceHalfWidth(squares, n) };
 }
 
 /** A share as a percentage, e.g. 80 % or 12.5 %; two decimals below 1 %, so a rare path does not read as 0 %. */
 export function formatShare(share: number): string {
   const percent = share * 100; // e.g. 0.0006 -> 0.06
   return `${percent > 0 && percent < 1 ? percent.toFixed(2) : String(Math.round(percent * 10) / 10)} %`;
+}
+
+// ---------------------------------------------------------------------------------
+// How the mean converges
+// ---------------------------------------------------------------------------------
+
+/** The mean of a time after the first `runs` finished runs, and how sure it is. */
+export interface ConvergencePoint {
+  runs: number; // k: the finished runs so far, in the order they were made
+  mean: number; // the mean of their times
+  halfWidth: number | null; // the 95 % confidence interval is mean ± this; null before MIN_RUNS_FOR_INTERVAL runs
+}
+
+/**
+ * How the mean of `quantity` settles as runs are added (the law of large numbers): one point
+ * per number of finished runs k, at most MAX_CONVERGENCE_POINTS of them, always with the first
+ * and the last. The chart draws k on a logarithmic axis, so the points are spread the same
+ * way: every k at first, then further and further apart (1, 2, 3, …, 100, 103, 106, …, 99 000,
+ * 100 000), each equally far from the next on the chart.
+ *
+ * The runs are gone through once, in the order they were made, keeping the mean and the sum of
+ * squared distances up to date (Welford's method: no sum is recomputed for every k, and no
+ * precision is lost by subtracting large sums).
+ *
+ * Example, test model A, CT of the first five runs 6, 65, 6, 6, 6 s:
+ *   means 6, 35.5, 25.7, 20.8, 17.8 s; no interval yet (fewer than 30 runs)
+ */
+export function convergence(result: CompletedAnalysis, quantity: TimeQuantity): ConvergencePoint[] {
+  const times = result.allRuns.filter((run) => run.outcome === "finished").map((run) => run[quantity]!); // in the order the runs were made; `!`: a finished run has a cycle time
+  const kept = new Set(Array.from({ length: MAX_CONVERGENCE_POINTS }, (_, i) => Math.round(times.length ** (i / (MAX_CONVERGENCE_POINTS - 1))))); // n^0 = 1 to n^1 = n in equal steps of the logarithm; the rounding makes the first ones every k
+  const points: ConvergencePoint[] = [];
+  let mean = 0; // of the runs so far
+  let squares = 0; // their squared distances from that mean, added up
+  times.forEach((time, index) => {
+    const k = index + 1; // runs so far
+    const delta = time - mean; // the new time's distance from the old mean
+    mean += delta / k; // the new mean
+    squares += delta * (time - mean); // Welford: the old and the new distance together update the sum exactly
+    if (kept.has(k)) points.push({ runs: k, mean, halfWidth: confidenceHalfWidth(squares, k) }); // includes the first (n^0) and the last (n^1)
+  });
+  return points;
+}
+
+/**
+ * Half the width of the 95 % confidence interval of a mean of `n` times, from their squared
+ * distances from the mean added up (`squares`): 1.96 · s / √n, where s is the standard
+ * deviation estimated from the runs (divided by n − 1, since a few runs would underestimate
+ * it otherwise) and s / √n the standard error, how much a mean of n runs varies. null for
+ * fewer than MIN_RUNS_FOR_INTERVAL runs.
+ * Example: test model A, 1000 runs, s ≈ 23.6 s -> 1.96 · 23.6 / √1000 ≈ 1.46 s.
+ */
+function confidenceHalfWidth(squares: number, n: number): number | null {
+  if (n < MIN_RUNS_FOR_INTERVAL) return null; // not trustworthy yet
+  return (Z_95 * Math.sqrt(squares / (n - 1))) / Math.sqrt(n);
 }
 
 /**
@@ -214,7 +273,7 @@ export function pathAnalysisCsv(graph: SimulationGraph, result: CompletedAnalysi
   rows.push(["Expected execution time (s)", round(result.expectedExecutionTime)], ["Expected cycle time (s)", round(result.expectedCycleTime)]); // spec 9.1
   for (const [quantity, name] of [["executionTime", "execution time"], ["cycleTime", "cycle time"]] as const) {
     const distribution = timeDistribution(result, quantity); // null when no run finished: the rows are left out
-    if (distribution) rows.push([`Standard deviation of the ${name} (s)`, round(distribution.standardDeviation)], [`Minimum ${name} (s)`, distribution.minimum], [`Maximum ${name} (s)`, distribution.maximum], [`90 % quantile of the ${name} (s)`, distribution.quantile90]); // how the times spread around the expected one
+    if (distribution) rows.push([`95 % confidence interval of the expected ${name} (± s)`, round(distribution.halfWidth95)], [`Standard deviation of the ${name} (s)`, round(distribution.standardDeviation)], [`Minimum ${name} (s)`, distribution.minimum], [`Maximum ${name} (s)`, distribution.maximum], [`90 % quantile of the ${name} (s)`, distribution.quantile90]); // how sure the expected time is, and how the times spread around it
   }
   rows.push(["Aborted runs", result.aborted], ["Runs without a further step", result.noStep]); // runs that formed no path
   rows.push([]); // an empty line between the tables

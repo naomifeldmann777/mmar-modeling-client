@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import type { ConditionRow, GraphFlow, GraphGenerator, GraphNode, SimulationGraph } from "./graph";
 import { analysePaths } from "./path-analysis";
-import { CLASS_COUNT, formatShare, groupIntoClasses, pathAnalysisCsv, pathLines, timeDistribution, type CompletedAnalysis } from "./path-report";
+import { CLASS_COUNT, convergence, formatShare, groupIntoClasses, MAX_CONVERGENCE_POINTS, pathAnalysisCsv, pathLines, timeDistribution, type CompletedAnalysis } from "./path-report";
 import type { NodeConcept } from "./vocabulary";
 
 // Builders, as in path-analysis.test.ts
@@ -125,6 +125,9 @@ describe("timeDistribution", () => {
     expect(distribution.standardDeviation).toBeCloseTo(23.6, 10); // √(0.8 × 11.8² + 0.2 × 47.2²)
     expect([distribution.minimum, distribution.maximum, distribution.quantile90]).toEqual([6, 65, 65]); // the 9th of 10 sorted times is 65
     expect(distribution.cumulative).toEqual([{ time: 6, share: 0.8 }, { time: 65, share: 1 }]); // 80 % took 6 s or less, all 65 s or less
+    expect(distribution.halfWidth95).toBeNull(); // 10 runs are too few for an interval
+    const many = timeDistribution(withTimes([...Array(800).fill(6), ...Array(200).fill(65)]), "executionTime")!; // 1000 runs
+    expect(many.halfWidth95).toBeCloseTo((1.96 * Math.sqrt((800 * 11.8 ** 2 + 200 * 47.2 ** 2) / 999)) / Math.sqrt(1000), 10); // 1.96 · s / √n ≈ 1.46 s
     expect(timeDistribution(withTimes([6, 65]), "cycleTime")!.entries.map((entry) => entry.from)).toEqual([7, 66]); // the other quantity
   });
 
@@ -156,9 +159,46 @@ describe("timeDistribution", () => {
 
   it("is in the CSV as the spread of both times", () => {
     const lines = pathAnalysisCsv(beeUp, analysed(beeUp, 4), "Order").split("\r\n");
-    expect(lines.filter((line) => /^(Standard deviation|Minimum|Maximum|90 % quantile)/.test(line)).map((line) => line.split(";")[0])).toEqual([
-      "Standard deviation of the execution time (s)", "Minimum execution time (s)", "Maximum execution time (s)", "90 % quantile of the execution time (s)",
-      "Standard deviation of the cycle time (s)", "Minimum cycle time (s)", "Maximum cycle time (s)", "90 % quantile of the cycle time (s)",
+    expect(lines.filter((line) => /^(95 %|Standard deviation|Minimum|Maximum|90 % quantile)/.test(line)).map((line) => line.split(";")[0])).toEqual([
+      "95 % confidence interval of the expected execution time (± s)", "Standard deviation of the execution time (s)", "Minimum execution time (s)", "Maximum execution time (s)", "90 % quantile of the execution time (s)",
+      "95 % confidence interval of the expected cycle time (± s)", "Standard deviation of the cycle time (s)", "Minimum cycle time (s)", "Maximum cycle time (s)", "90 % quantile of the cycle time (s)",
     ]);
+  });
+});
+
+describe("convergence", () => {
+  /** A finished analysis whose finished runs have the cycle times `times`, in this order, with an aborted run in between. */
+  function withTimes(times: number[]): CompletedAnalysis {
+    const runs = times.map((time) => ({ outcome: "finished" as const, trace: [], executionTime: time, cycleTime: time, path: 0 }));
+    runs.splice(1, 0, { outcome: "aborted" as never, trace: [], executionTime: 999, cycleTime: null as never, path: null as never }); // has no cycle time: skipped
+    return { ok: true, runs: runs.length, seed: 1, paths: [], allRuns: runs, noStep: 0, aborted: 1, expectedExecutionTime: null, expectedCycleTime: null, nodeExecutions: {} };
+  }
+
+  it("gives the mean after each finished run, in the order the runs were made", () => {
+    const points = convergence(withTimes([6, 65, 6, 6, 6]), "cycleTime");
+    expect(points.map((point) => point.runs)).toEqual([1, 2, 3, 4, 5]);
+    expect(points.map((point) => Math.round(point.mean * 100) / 100)).toEqual([6, 35.5, 25.67, 20.75, 17.8]);
+    expect(points.every((point) => point.halfWidth === null)).toBe(true); // fewer than 30 runs: no interval
+  });
+
+  it("adds the 95 % interval from 30 runs on, 1.96 · s / √k", () => {
+    const times = Array.from({ length: 40 }, (_, i) => (i % 4 === 0 ? 65 : 6)); // a quarter 65 s
+    const points = convergence(withTimes(times), "cycleTime");
+    expect(points[28].halfWidth).toBeNull(); // after 29 runs
+    const first30 = times.slice(0, 30);
+    const mean = first30.reduce((a, b) => a + b, 0) / 30;
+    const s = Math.sqrt(first30.reduce((sum, t) => sum + (t - mean) ** 2, 0) / 29);
+    expect(points[29].mean).toBeCloseTo(mean, 10);
+    expect(points[29].halfWidth).toBeCloseTo((1.96 * s) / Math.sqrt(30), 10);
+  });
+
+  it("keeps at most 400 points, every run at first and further apart later, with the first and the last", () => {
+    const points = convergence(withTimes(Array.from({ length: 10000 }, (_, i) => i % 7)), "executionTime");
+    expect(points.length).toBeLessThanOrEqual(MAX_CONVERGENCE_POINTS);
+    expect(points.slice(0, 30).map((point) => point.runs)).toEqual(Array.from({ length: 30 }, (_, i) => i + 1)); // where the mean still moves: every run
+    expect(points[points.length - 1].runs - points[points.length - 2].runs).toBeGreaterThan(100); // where it lies still: far apart
+    expect(points[0].runs).toBe(1);
+    expect(points[points.length - 1].runs).toBe(10000);
+    expect(points[points.length - 1].mean).toBeCloseTo(Array.from({ length: 10000 }, (_, i) => i % 7).reduce((a, b) => a + b, 0) / 10000, 10); // no precision lost on the way
   });
 });

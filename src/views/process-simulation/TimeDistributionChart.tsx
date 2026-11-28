@@ -27,6 +27,7 @@
  */
 import { Box, Typography, useTheme } from "@mui/material";
 import { formatShare, groupIntoClasses, type TimeDistribution } from "@/resources/process-simulation/path-report"; // the share axis' ticks, e.g. 50 %; classes when bars would be too thin
+import { formatNumber, niceCeiling, niceTicks } from "./chart-scale"; // clean axis numbers, shared with the convergence chart
 
 /** Which view of the distribution is drawn (see the top of the file). */
 export type DistributionView = "perValue" | "cumulative";
@@ -167,28 +168,6 @@ function quantileLabel(quantile: number, roomLeft: number, roomRight: number): {
     if (fits(text, roomRight)) return { text, above: false };
   }
   return { text: texts[1], above: roomLeft >= roomRight }; // a very narrow chart: the short text on the wider side
-}
-
-/** A number with at most two decimals, e.g. 52.5 or 6, for the time ticks. */
-function formatNumber(value: number): string {
-  return String(Math.round(value * 100) / 100);
-}
-
-/** The top of the share axis: the smallest of 1, 2, 2.5, 5 × a power of ten that reaches `value`. */
-function niceCeiling(value: number): number {
-  if (value <= 0) return 1; // no share at all: any axis will do
-  const power = 10 ** Math.floor(Math.log10(value)); // e.g. 0.1 for 0.6
-  return [1, 2, 2.5, 5, 10].map((step) => step * power).find((candidate) => candidate >= value - 1e-12)!; // e.g. 0.3: 0.1, 0.2, 0.25 are too small, 0.5 reaches it; the tolerance keeps 0.2 at 0.2
-}
-
-/** About `count` clean ticks from `low` to `high`: multiples of 1, 2 or 5 × a power of ten. */
-function niceTicks(low: number, high: number, count: number): number[] {
-  const rough = (high - low) / count; // the step if any number would do
-  const power = 10 ** Math.floor(Math.log10(rough)); // its order of magnitude
-  const step = [1, 2, 5, 10].map((factor) => factor * power).find((candidate) => candidate >= rough)!; // the next clean step
-  const ticks: number[] = [];
-  for (let tick = Math.ceil(low / step) * step; tick <= high + 1e-9; tick += step) ticks.push(Math.round(tick * 1e9) / 1e9); // rounded, so 0.1 + 0.2 shows as 0.3
-  return ticks;
 }
 
 /** A bar from `left` to `right`, up to `topY`, its top corners rounded by up to 4 px and square at the baseline. */

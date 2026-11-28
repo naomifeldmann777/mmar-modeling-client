@@ -14,7 +14,7 @@ afterEach(() => cleanup());
 const TWO_VALUES: TimeDistribution = {
   entries: [{ from: 6, to: 6, runs: 800, share: 0.8 }, { from: 65, to: 65, runs: 200, share: 0.2 }],
   grouped: false, runs: 1000, mean: 17.8, standardDeviation: 23.6, minimum: 6, maximum: 65, quantile90: 65,
-  cumulative: [{ time: 6, share: 0.8 }, { time: 65, share: 1 }],
+  cumulative: [{ time: 6, share: 0.8 }, { time: 65, share: 1 }], halfWidth95: 1.46,
 };
 
 /** The texts of the chart. */
