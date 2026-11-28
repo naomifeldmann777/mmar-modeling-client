@@ -6,14 +6,14 @@
 // session are mocked, since they need the 3D engine or the open model (path-highlight and
 // path-analysis-session have their own tests). Ids are invented.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { GraphFlow, GraphNode, SimulationGraph } from "@/resources/process-simulation/graph";
 import { analysePaths } from "@/resources/process-simulation/path-analysis";
 import type { NodeConcept } from "@/resources/process-simulation/vocabulary";
 
-const mocks = vi.hoisted(() => ({ showPath: vi.fn(), clearPathHighlight: vi.fn(), runPathAnalysis: vi.fn(), exportPathAnalysis: vi.fn(), closePathAnalysis: vi.fn() }));
+const mocks = vi.hoisted(() => ({ showPath: vi.fn(), clearPathHighlight: vi.fn(), runPathAnalysis: vi.fn(), cancelPathAnalysis: vi.fn(), exportPathAnalysis: vi.fn(), closePathAnalysis: vi.fn() }));
 vi.mock("./path-highlight", () => ({ showPath: mocks.showPath, clearPathHighlight: mocks.clearPathHighlight, PATH_COLOUR: "#ff9800" }));
-vi.mock("./path-analysis-session", () => ({ runPathAnalysis: mocks.runPathAnalysis, exportPathAnalysis: mocks.exportPathAnalysis, closePathAnalysis: mocks.closePathAnalysis }));
+vi.mock("./path-analysis-session", () => ({ runPathAnalysis: mocks.runPathAnalysis, cancelPathAnalysis: mocks.cancelPathAnalysis, exportPathAnalysis: mocks.exportPathAnalysis, closePathAnalysis: mocks.closePathAnalysis }));
 
 import { usePathAnalysisStore } from "@/resources/store/pathAnalysisStore";
 import PathAnalysisPanel from "./PathAnalysisPanel";
@@ -151,6 +151,25 @@ describe("PathAnalysisPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cumulative" }));
     expect(screen.getByRole("img", { name: "Cumulative distribution of the cycle time over the finished runs" })).toBeTruthy();
     expect(screen.getByText("90 % finish within 65 s")).toBeTruthy(); // one branch at a time, so CT = ET: about 80 % take 6 s, so 90 % are only done at 65 s
+  });
+
+  it("shows the progress in a dialog while an analysis runs, offers Cancel, and takes no second Start", async () => {
+    store().open("scene-1");
+    store().setProgress({ done: 43000, total: 100000 }); // as the session reports it
+    render(<PathAnalysisPanel />);
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("43,000 of 100,000 runs")).toBeTruthy();
+    expect(within(dialog).getByRole("progressbar").getAttribute("aria-valuenow")).toBe("43");
+    expect((screen.getByRole("button", { name: "Start", hidden: true }) as HTMLButtonElement).disabled).toBe(true); // behind the dialog, and off while it runs
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(mocks.cancelPathAnalysis).toHaveBeenCalledTimes(1);
+    const keys = vi.fn();
+    window.addEventListener("keydown", keys);
+    fireEvent.keyDown(within(dialog).getByRole("button", { name: "Cancel" }), { key: "Delete" });
+    window.removeEventListener("keydown", keys);
+    expect(keys).not.toHaveBeenCalled(); // the client's shortcuts never see it
+    act(() => store().setProgress(null)); // the analysis is done
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull()); // closing is animated
   });
 
   it("exports and closes through the session", () => {

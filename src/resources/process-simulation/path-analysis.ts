@@ -119,13 +119,58 @@ export function analysePaths(graph: SimulationGraph, options: PathAnalysisOption
   const problems = validateGraph(graph); // the same checks as before a stepper run (spec 10)
   if (problems.length > 0) return { ok: false, problems }; // nothing runs
 
-  const runs = Math.min(MAX_RUNS, Math.max(1, Math.floor(options.runs))); // a whole number in the allowed range, whatever was typed
-  const seed = options.seed ?? Math.floor(Math.random() * 2 ** 31); // a whole number the user can type in again to repeat the analysis
-  const random = seededRandom(seed); // every random number of the analysis comes from here
-
+  const { runs, seed, random } = prepare(options); // how many, and the random numbers
   const allRuns: AnalysedRun[] = []; // spec 9: every run is kept
   for (let i = 0; i < runs; i++) allRuns.push(analyseRun(graph, random)); // one run after the other, from the same random sequence
+  return aggregate(allRuns, runs, seed);
+}
 
+/** How analysePathsInPortions reports and pauses; given by the caller, since only it knows the browser. */
+export interface PortionControl {
+  onProgress: (done: number, total: number) => void; // after every portion, and once at the end
+  pause: () => Promise<void>; // between two portions: lets the browser draw the progress
+  cancelled: () => boolean; // asked after every pause: true stops the analysis
+}
+
+export const PORTION_MS = 50; // how long one portion runs before the browser may draw: short enough for a moving bar, long enough to cost little
+
+/**
+ * The same analysis as analysePaths, in portions of about PORTION_MS: after each portion it
+ * reports how many runs are done and pauses, so the browser can draw a progress bar. The runs
+ * come from the same random sequence in the same order, so the result is exactly that of
+ * analysePaths with the same options. null when it was cancelled; nothing of it is kept.
+ *
+ * Example: 100 000 runs of about 0.1 ms each: about 220 portions of some 450 runs, each
+ * followed by onProgress(450, 100000), onProgress(900, 100000), …
+ */
+export async function analysePathsInPortions(graph: SimulationGraph, options: PathAnalysisOptions, control: PortionControl): Promise<PathAnalysisResult | null> {
+  const problems = validateGraph(graph); // as in analysePaths
+  if (problems.length > 0) return { ok: false, problems };
+
+  const { runs, seed, random } = prepare(options);
+  const allRuns: AnalysedRun[] = [];
+  let portionStart = performance.now(); // when the current portion began
+  for (let i = 0; i < runs; i++) {
+    allRuns.push(analyseRun(graph, random)); // the same runs as analysePaths makes
+    if (performance.now() - portionStart < PORTION_MS) continue; // the portion goes on
+    control.onProgress(i + 1, runs); // runs done so far
+    await control.pause(); // the browser draws
+    if (control.cancelled()) return null; // "Cancel" was clicked in the meantime
+    portionStart = performance.now(); // the next portion
+  }
+  control.onProgress(runs, runs); // all done
+  return aggregate(allRuns, runs, seed);
+}
+
+/** The number of runs, kept in range, the seed, chosen when none is given, and the random numbers it starts. */
+function prepare(options: PathAnalysisOptions): { runs: number; seed: number; random: () => number } {
+  const runs = Math.min(MAX_RUNS, Math.max(1, Math.floor(options.runs))); // a whole number in the allowed range, whatever was typed
+  const seed = options.seed ?? Math.floor(Math.random() * 2 ** 31); // a whole number the user can type in again to repeat the analysis
+  return { runs, seed, random: seededRandom(seed) }; // every random number of the analysis comes from here
+}
+
+/** The runs, grouped into paths, with the expected times and the executions per node. */
+function aggregate(allRuns: AnalysedRun[], runs: number, seed: number): PathAnalysisResult {
   // Group the finished runs by their trace. The key is the node uuids in order.
   const byTrace = new Map<string, AnalysedPath>(); // trace key -> its path
   for (const run of allRuns) {

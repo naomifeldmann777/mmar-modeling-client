@@ -578,6 +578,21 @@ Test setup (`vitest.config.ts`, `src/test-setup.ts`):
   client from freezing for 100 000 runs.
 - `chart-scale.ts`: the axis helpers of both charts (clean ticks, share axis top, numbers).
 
+### Phase 16: progress of the path analysis
+
+- `analysePathsInPortions` (`path-analysis.ts`): the same runs as `analysePaths`, in portions of
+  about 50 ms; after each it reports the runs done and pauses, so the browser can draw. Same
+  options, same result (tested); `prepare` and `aggregate` are shared by both. null when
+  cancelled.
+- Session: `runPathAnalysis` is asynchronous; the store holds `progress` ({ done, total }) while
+  it runs; `cancelPathAnalysis` stops it after the current portion and keeps the earlier result.
+  The pause waits for the next drawn frame, or 50 ms in a hidden tab, so it never stalls. The
+  model's fingerprint is taken at the start.
+- Panel: a modal dialog over the whole client with a progress bar ("43,000 of 100,000 runs") and
+  "Cancel"; nothing behind it takes a click, and it keeps the keyboard from the client's
+  shortcuts. Decided with the user: the client stays blocked, but shows the progress.
+- Measured: no steady extra time from the portions (noise of ±30 % between measurements).
+
 ## Findings of Phase 0 for later phases
 
 These were the open findings of Phase 0; they are answered in the section above, except

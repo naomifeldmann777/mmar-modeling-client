@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ConditionRow, GraphFlow, GraphGenerator, GraphNode, SimulationGraph } from "./graph";
-import { analysePaths, MAX_STEPS, seededRandom, type PathAnalysisResult } from "./path-analysis";
+import { analysePaths, analysePathsInPortions, MAX_STEPS, seededRandom, type PathAnalysisResult } from "./path-analysis";
 import type { NodeConcept } from "./vocabulary";
 
 // ---------------------------------------------------------------------------------
@@ -210,5 +210,35 @@ describe("analysePaths: continuous distributions", () => {
   it("repeats exactly with the same seed", () => {
     const g = amountModel({ type: "Normal", mean: 100, standardDeviation: 15 }, "100");
     expect(analysed(g, 200, 7).allRuns).toEqual(analysed(g, 200, 7).allRuns);
+  });
+});
+
+describe("analysePathsInPortions", () => {
+  /** Pausing without waiting, as a test needs no browser to draw. */
+  const control = (cancelAfter = Infinity) => {
+    const progress: number[] = [];
+    return { progress, onProgress: (done: number) => progress.push(done), pause: async () => undefined, cancelled: () => progress.length > cancelAfter };
+  };
+
+  it("gives exactly the result of analysePaths, and reports its progress", async () => {
+    const reporting = control();
+    const result = await analysePathsInPortions(modelA, { runs: 20000, seed: 9 }, reporting);
+    expect(result).toEqual(analysePaths(modelA, { runs: 20000, seed: 9 })); // the same runs from the same random numbers
+    expect(reporting.progress.at(-1)).toBe(20000); // done
+    expect(reporting.progress).toEqual([...reporting.progress].sort((a, b) => a - b)); // only ever forward
+  });
+
+  it("stops when cancelled, and keeps nothing", async () => {
+    const cancelling = control(0); // cancelled after the first portion
+    expect(await analysePathsInPortions(modelA, { runs: 100000, seed: 9 }, cancelling)).toBeNull();
+    expect(cancelling.progress).toHaveLength(1); // one portion ran
+  });
+
+  it("refuses a model the validator refuses, without running", async () => {
+    const reporting = control();
+    const noEnd = graph([node("start", "Start"), node("a", "Activity")], [flow("f1", "start", "a")]);
+    const result = await analysePathsInPortions(noEnd, { runs: 10 }, reporting);
+    expect(result?.ok).toBe(false);
+    expect(reporting.progress).toEqual([]);
   });
 });

@@ -23,7 +23,7 @@ import { useLogStore } from "@/resources/store/logStore";
 import { usePathAnalysisStore } from "@/resources/store/pathAnalysisStore";
 import { useProcessSimulationStore } from "@/resources/store/processSimulationStore";
 import { useStateStore } from "@/resources/store/stateStore";
-import { closePathAnalysis, openPathAnalysis, runPathAnalysis } from "./path-analysis-session";
+import { cancelPathAnalysis, closePathAnalysis, openPathAnalysis, runPathAnalysis } from "./path-analysis-session";
 import { startStepper } from "./stepper-session";
 
 // A model of the test language: Start → End.
@@ -56,10 +56,10 @@ afterEach(() => {
 });
 
 describe("path-analysis-session", () => {
-  it("opens the panel on the open model, then analyses it", () => {
+  it("opens the panel on the open model, then analyses it", async () => {
     openPathAnalysis();
     expect(store()).toMatchObject({ active: true, sceneInstanceId: "scene-1", result: null }); // no result before "Start"
-    runPathAnalysis({ runs: 5, seed: 1 });
+    await runPathAnalysis({ runs: 5, seed: 1 });
     expect(store().result?.paths.map((path) => path.nodes)).toEqual([["start", "end"]]);
     expect(store().result?.runs).toBe(5);
   });
@@ -71,26 +71,43 @@ describe("path-analysis-session", () => {
     expect(snackbar().message).toContain("Open a model first");
   });
 
-  it("shows a message, and no result, when the model's scene type has no mapping", () => {
+  it("shows a message, and no result, when the model's scene type has no mapping", async () => {
     mocks.globalObject.tabContext = [{ sceneType: { ...sceneType, name: "Robotic System" }, sceneInstance }];
     openPathAnalysis();
-    runPathAnalysis({ runs: 5 });
+    await runPathAnalysis({ runs: 5 });
     expect(store().result).toBeNull();
     expect(store().message).toBe('The process simulation has no mapping for the metamodel "Robotic System", so it cannot analyse this model.');
   });
 
-  it("marks the result outdated once the model is changed, and not before", () => {
+  it("marks the result outdated once the model is changed, and not before", async () => {
     vi.useFakeTimers();
     openPathAnalysis();
-    runPathAnalysis({ runs: 5, seed: 1 });
+    await runPathAnalysis({ runs: 5, seed: 1 });
     store().select(0); // a path is shown in the model
     vi.advanceTimersByTime(3000);
     expect(store().stale).toBe(false); // nothing changed
     (sceneInstance.class_instances[0] as unknown as { coordinates_2d: { x: number } }).coordinates_2d.x = 4; // e.g. the Start is moved
     vi.advanceTimersByTime(1000);
     expect(store()).toMatchObject({ stale: true, selectedPath: null }); // the panel says so; the highlighted path goes
-    runPathAnalysis({ runs: 5, seed: 1 }); // started again on the changed model
+    await runPathAnalysis({ runs: 5, seed: 1 }); // started again on the changed model
     expect(store().stale).toBe(false);
+  });
+
+  it("reports its progress while it runs, and keeps the earlier result when cancelled", async () => {
+    openPathAnalysis();
+    await runPathAnalysis({ runs: 5, seed: 1 }); // an earlier result
+    const earlier = store().result;
+    const seen: (number | undefined)[] = []; // the progress the dialog would show
+    const unsubscribe = usePathAnalysisStore.subscribe((state) => seen.push(state.progress?.done));
+    const running = runPathAnalysis({ runs: 100000, seed: 2 }); // long enough for several portions; returns after the first one, at its first pause
+    expect(store().progress?.total).toBe(100000); // the dialog is open
+    expect(store().progress!.done).toBeLessThan(100000); // and not yet done
+    cancelPathAnalysis();
+    await running;
+    unsubscribe();
+    expect(store().progress).toBeNull(); // the dialog is closed
+    expect(store().result).toBe(earlier); // nothing of the cancelled analysis
+    expect(seen.some((done) => done !== undefined && done > 0 && done < 100000)).toBe(true); // it ran in portions and said how far it got
   });
 
   it("closes with a message when the user switches tabs", () => {

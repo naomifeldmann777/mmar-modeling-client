@@ -5,6 +5,8 @@
  * What it shows, from top to bottom:
  * - the settings: the number of runs (1000 proposed, at most MAX_RUNS), "Seed" with its
  *   "Value" to repeat an analysis exactly, and "Start";
+ * - while an analysis runs, a modal dialog over the whole client with a progress bar
+ *   ("43,000 of 100,000 runs") and "Cancel" (ProgressDialog);
  * - a note when the model was changed after the analysis, or why the analysis could not run;
  * - the summary: runs, expected execution and cycle time, runs that did not finish, the seed;
  * - the distribution of the execution or the cycle time over the finished runs: a chart
@@ -19,8 +21,9 @@
  * - "Export CSV" and "Close".
  *
  * Who it talks to: it reads pathAnalysisStore; selecting and sorting go to the store, since
- * they only change what is shown. "Start", "Export CSV" and "Close" go to path-analysis-session,
- * since they read the model, download a file or stop watching the model.
+ * they only change what is shown. "Start", "Cancel", "Export CSV" and "Close" go to
+ * path-analysis-session, since they run the analysis, read the model, download a file or stop
+ * watching the model.
  *
  * Path numbers are the order by probability (path 1 is the most probable, as in BEE-UP) and
  * stay with the path when the table is sorted otherwise.
@@ -34,8 +37,13 @@ import {
   Box,
   Button,
   Checkbox,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControlLabel,
   Icon,
+  LinearProgress,
   Paper,
   Stack,
   Table,
@@ -54,7 +62,7 @@ import { DEFAULT_RUNS, MAX_RUNS } from "@/resources/process-simulation/path-anal
 import { convergence, pathLines, timeDistribution, type CompletedAnalysis, type TimeQuantity } from "@/resources/process-simulation/path-report"; // the element list of a path; the distribution of a time and how its mean converges
 import { usePathAnalysisStore, type PathSort } from "@/resources/store/pathAnalysisStore";
 import { clearPathHighlight, PATH_COLOUR, showPath } from "./path-highlight"; // the selected path in the 3D model, and its colour
-import { closePathAnalysis, exportPathAnalysis, runPathAnalysis } from "./path-analysis-session"; // what touches the model or the browser
+import { cancelPathAnalysis, closePathAnalysis, exportPathAnalysis, runPathAnalysis } from "./path-analysis-session"; // what touches the model or the browser
 import ConvergenceChart from "./ConvergenceChart"; // how the mean settles over the runs
 import TimeDistributionChart, { type DistributionView } from "./TimeDistributionChart"; // the distribution as a chart
 
@@ -68,6 +76,7 @@ export default function PathAnalysisPanel() {
   const sort = usePathAnalysisStore((s) => s.sort); // the order of the table
   const select = usePathAnalysisStore((s) => s.select);
   const sortBy = usePathAnalysisStore((s) => s.sortBy);
+  const running = usePathAnalysisStore((s) => s.progress !== null); // an analysis is under way
 
   // The settings, as typed: checked on "Start".
   const [runs, setRuns] = useState(String(DEFAULT_RUNS)); // 1000 proposed
@@ -84,7 +93,7 @@ export default function PathAnalysisPanel() {
     return () => clearPathHighlight(); // before the next path, and when the panel closes
   }, [graph, result, selectedPath]);
 
-  const start = () => runPathAnalysis({ runs: runCount, seed: seedOn ? Number(seed.trim()) : undefined }); // the session reads the model as it is now
+  const start = () => void runPathAnalysis({ runs: runCount, seed: seedOn ? Number(seed.trim()) : undefined }); // the session reads the model as it is now; the store follows the progress, so nothing waits here
 
   return (
     <Stack spacing={1.5} sx={{ fontSize: "0.875rem" }}>
@@ -102,11 +111,13 @@ export default function PathAnalysisPanel() {
               <TextField label="Value" size="small" value={seed} onChange={(event) => setSeed(event.target.value)} disabled={!seedOn} error={!seedValid} helperText={seedOn ? "repeats an analysis" : " "} sx={{ flex: 1 }} />
             </Stack>
           </Stack>
-          <Button variant="contained" size="small" fullWidth startIcon={<Icon>play_arrow</Icon>} onClick={start} disabled={!runsValid || !seedValid}>
+          <Button variant="contained" size="small" fullWidth startIcon={<Icon>play_arrow</Icon>} onClick={start} disabled={!runsValid || !seedValid || running}>
             Start
           </Button>
         </Stack>
       </Paper>
+
+      <ProgressDialog />
 
       {/* Notes */}
       {stale && <Alert severity="warning">The model was changed after this analysis. Start it again to see the paths of the model as it is now.</Alert>}
@@ -146,6 +157,32 @@ export default function PathAnalysisPanel() {
         </Button>
       </Stack>
     </Stack>
+  );
+}
+
+/**
+ * While an analysis runs: a dialog over the whole client with the progress and "Cancel". It is
+ * modal, so nothing behind it takes a click and the model cannot change; it also keeps the
+ * keyboard from the client's shortcuts (Delete, Ctrl+Z, …), which listen on the window. Only
+ * "Cancel" closes it early: a click beside it or Escape would leave the analysis running
+ * without its bar.
+ */
+function ProgressDialog() {
+  const progress = usePathAnalysisStore((s) => s.progress); // null: no analysis runs
+  const share = progress && progress.total > 0 ? (progress.done / progress.total) * 100 : 0; // for the bar, in percent
+  return (
+    <Dialog open={progress !== null} onClose={() => undefined} onKeyDown={(event) => event.stopPropagation()} maxWidth="xs" fullWidth>
+      <DialogTitle>Path analysis running</DialogTitle>
+      <DialogContent>
+        <LinearProgress variant="determinate" value={share} aria-label="Progress of the path analysis" />
+        <Typography variant="body2" sx={{ mt: 1 }}>
+          {progress ? `${progress.done.toLocaleString("en-US")} of ${progress.total.toLocaleString("en-US")} runs` : ""}
+        </Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={cancelPathAnalysis}>Cancel</Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 

@@ -6,15 +6,20 @@
  * - The menu entry "Process Simulation → Path Analysis" calls `openPathAnalysis`. It opens
  *   the panel on the model of the active tab, empty: the user sets the runs and the seed.
  * - The panel's "Start" calls `runPathAnalysis`. It reads the model as it is now, picks the
- *   mapping of its scene type, builds the graph, runs the analysis and hands the result to the
- *   store. Starting again later analyses the model as it is then.
+ *   mapping of its scene type, builds the graph, runs the analysis in portions, reporting the
+ *   progress to the store, and hands the result to the store. Starting again later analyses
+ *   the model as it is then.
+ * - The progress dialog's "Cancel" calls `cancelPathAnalysis`: the analysis stops after its
+ *   current portion, and the earlier result, if any, stays.
  * - The panel's "Export CSV" calls `exportPathAnalysis`, which downloads the result as a file.
  * - The panel's "Close" calls `closePathAnalysis`.
  *
  * The model and the analysis (decided for B2):
- * - While the analysis runs, the model cannot change: it runs in one go, and the client does
- *   not take a click before it is done (at most MAX_RUNS runs: about 1 s for 10 000, about
- *   10 s for 100 000).
+ * - While the analysis runs, the model cannot change: the panel shows a modal progress dialog
+ *   over the whole client, which takes no click but "Cancel" and keeps the keyboard shortcuts
+ *   from the model (at most MAX_RUNS runs: about 1 s for 10 000, about 11 s for 100 000). The
+ *   analysis runs in portions so that the browser can draw the progress between them; the
+ *   fingerprint of the model is taken at the start, so a change would still be noticed.
  * - Afterwards the model may be edited, unlike with the stepper: the result is a finished
  *   snapshot. Once the model differs from the analysed one, the store marks the result as
  *   outdated: the panel says so and the highlighted path goes, since it could sit in the
@@ -37,7 +42,7 @@ import { globalObject } from "@/engine"; // the open tabs
 import { eventBus, type Subscription } from "@/resources/services/event-bus"; // tab changes
 import { logger } from "@/resources/services/logger"; // "error" shows the message in the snackbar
 import { mappingFor } from "@/resources/process-simulation/mappings"; // the mapping of the model's language
-import { analysePaths, type PathAnalysisOptions } from "@/resources/process-simulation/path-analysis"; // the runs
+import { analysePathsInPortions, type PathAnalysisOptions } from "@/resources/process-simulation/path-analysis"; // the runs, in portions so the progress can be drawn
 import { pathAnalysisCsv } from "@/resources/process-simulation/path-report"; // the result as CSV text
 import { transformModel } from "@/resources/process-simulation/transformer"; // model + mapping -> graph
 import { usePathAnalysisStore } from "@/resources/store/pathAnalysisStore"; // the result, shared with the panel
@@ -48,6 +53,7 @@ const CHANGE_CHECK_MS = 1000; // how often the model is compared with the analys
 
 let watching: Subscription[] = []; // the event and store subscriptions of the open panel
 let changeCheck: ReturnType<typeof setInterval> | null = null; // the comparison with the analysed model, while one runs
+let cancelRequested = false; // set by "Cancel", read by the running analysis after each portion
 
 /** Opens the path-analysis panel on the model of the active tab. */
 export function openPathAnalysis(): void {
@@ -69,22 +75,59 @@ export function openPathAnalysis(): void {
   ];
 }
 
-/** Analyses the model as it is now, with the user's settings, and shows the result. */
-export function runPathAnalysis(options: PathAnalysisOptions): void {
+/**
+ * Analyses the model as it is now, with the user's settings, and shows the result. Resolves
+ * once the analysis is done or cancelled; while it runs, the store holds its progress.
+ */
+export async function runPathAnalysis(options: PathAnalysisOptions): Promise<void> {
   const store = usePathAnalysisStore.getState(); // where the result goes
   const tab = globalObject.tabContext[globalObject.selectedTab]; // the model of the panel: a tab change closes the panel
   if (!store.active || !tab || tab.sceneInstance.uuid !== store.sceneInstanceId) return; // the panel is not open on this model
+  if (store.progress) return; // one analysis at a time
 
-  stopChangeCheck(); // the result about to be shown is the one to compare with
   const mapping = mappingFor(tab.sceneType.name); // e.g. the mapping of "BPMN 2.0"
   if (!mapping) {
+    stopChangeCheck(); // the message replaces the result
     store.showMessage(`The process simulation has no mapping for the metamodel "${tab.sceneType.name}", so it cannot analyse this model.`); // as for the stepper
     return;
   }
   const graph = transformModel(tab.sceneType, tab.sceneInstance, mapping); // the model as it is now
-  const result = analysePaths(graph, options); // the validator first, then the runs
-  store.showResult(graph, result); // the paths, or the problems
-  if (result.ok) startChangeCheck(tab.sceneInstance); // from now on, notice when the model differs
+  const analysed = fingerprint(tab.sceneInstance); // taken now: should the model change during the analysis, the result is marked outdated
+  cancelRequested = false; // a "Cancel" of an earlier analysis does not count
+  store.setProgress({ done: 0, total: options.runs }); // the dialog opens
+  const result = await analysePathsInPortions(graph, options, {
+    onProgress: (done, total) => usePathAnalysisStore.getState().setProgress({ done, total }), // the bar moves
+    pause: nextFrame, // the browser draws it
+    cancelled: () => cancelRequested || !usePathAnalysisStore.getState().active, // "Cancel", or the panel was closed
+  });
+  const now = usePathAnalysisStore.getState(); // the store as it is after the analysis
+  now.setProgress(null); // the dialog closes
+  if (result === null || !now.active) return; // cancelled: the earlier result, if any, stays
+  stopChangeCheck(); // the comparison belongs to the earlier result
+  now.showResult(graph, result); // the paths, or the problems
+  if (result.ok) startChangeCheck(tab.sceneInstance, analysed); // from now on, notice when the model differs
+}
+
+/** Stops the running analysis after its current portion ("Cancel" in the progress dialog). */
+export function cancelPathAnalysis(): void {
+  cancelRequested = true; // read by the analysis after its next portion
+}
+
+/**
+ * Waits until the browser has drawn the next frame, so the progress bar moves. A hidden tab
+ * draws no frames, so after 50 ms it goes on anyway: the analysis never stalls.
+ */
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    const fallback = setTimeout(resolve, 50); // a hidden tab, or no browser at all
+    if (typeof requestAnimationFrame !== "function") return; // e.g. in tests: the fallback resolves
+    requestAnimationFrame(() =>
+      setTimeout(() => {
+        clearTimeout(fallback);
+        resolve();
+      }, 0), // after the frame: it has been drawn
+    );
+  });
 }
 
 /**
@@ -118,9 +161,8 @@ function closeWithMessage(message: string): void {
   logger.log(message, "error"); // "error" raises the snackbar, so the user sees why the panel closed
 }
 
-/** Compares the model with the analysed one once a second, and marks the result outdated once it differs. */
-function startChangeCheck(sceneInstance: SceneInstance): void {
-  const analysed = fingerprint(sceneInstance); // the model as analysed
+/** Compares the model with the analysed one (`analysed`, its fingerprint) once a second, and marks the result outdated once it differs. */
+function startChangeCheck(sceneInstance: SceneInstance, analysed: string): void {
   changeCheck = setInterval(() => {
     if (fingerprint(sceneInstance) === analysed) return; // unchanged
     usePathAnalysisStore.getState().markStale(); // the panel says so; the highlighted path goes

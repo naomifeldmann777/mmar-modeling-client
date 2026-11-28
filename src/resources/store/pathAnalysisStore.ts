@@ -11,9 +11,9 @@ import type { ValidationProblem } from "@/resources/process-simulation/validator
  * the same result, and the session (path-analysis-session) changes it from outside the panel,
  * e.g. when the model changes after the analysis.
  *
- * Who writes it: `path-analysis-session.ts` opens and closes it, shows a result or a message,
- * and marks the result outdated; the panel selects a path and sorts the table. Everyone else
- * only reads.
+ * Who writes it: `path-analysis-session.ts` opens and closes it, reports the progress of a
+ * running analysis, shows a result or a message, and marks the result outdated; the panel
+ * selects a path and sorts the table. Everyone else only reads.
  *
  * Deliberately NOT here, as in processSimulationStore: no engine, no MMAR, no three.js, and
  * no computing. The analysis runs in the session; the store only holds what it returned.
@@ -32,11 +32,14 @@ interface PathAnalysisState {
   selectedPath: number | null; // index in result.paths of the path shown in the model, if any
   sort: PathSort; // the order of the path table
   stale: boolean; // the model has changed since the result was computed
+  progress: { done: number; total: number } | null; // runs done of runs planned while an analysis runs; null otherwise
 
   /** Opens the panel on a model, with no result yet: the user sets the runs and starts. */
   open: (sceneInstanceId: string) => void;
   /** Keeps what an analysis of `graph` returned: the result, or the validator's problems. */
   showResult: (graph: SimulationGraph, result: PathAnalysisResult) => void;
+  /** An analysis runs and has made `done` of `total` runs; null when none runs (any more). */
+  setProgress: (progress: { done: number; total: number } | null) => void;
   /** Keeps a message instead of a result, when not even a graph could be built. */
   showMessage: (message: string) => void;
   /** Shows a path in the model, or none with null. Refused while the result is outdated. */
@@ -51,7 +54,7 @@ interface PathAnalysisState {
   reset: () => void;
 }
 
-const EMPTY = { graph: null, result: null, problems: [], message: null, selectedPath: null, stale: false }; // no analysis yet
+const EMPTY = { graph: null, result: null, problems: [], message: null, selectedPath: null, stale: false, progress: null }; // no analysis yet, none running
 const CLOSED = { active: false, sceneInstanceId: null, sort: "probability" as PathSort, ...EMPTY }; // the state while the panel is not open
 
 export const usePathAnalysisStore = create<PathAnalysisState>((set, get) => ({
@@ -68,6 +71,7 @@ export const usePathAnalysisStore = create<PathAnalysisState>((set, get) => ({
       selectedPath: result.ok && result.paths.length > 0 ? 0 : null, // the most probable path is shown at once, so it is clear that paths can be selected
     }),
 
+  setProgress: (progress) => set({ progress }), // the earlier result stays on show while a new analysis runs, and after a cancelled one
   showMessage: (message) => set({ ...EMPTY, message }), // e.g. no mapping for the metamodel
 
   select: (index) => {
